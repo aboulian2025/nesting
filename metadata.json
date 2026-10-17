@@ -1,0 +1,6 @@
+{
+  "name": "محرك توزيع الألواح وتوفير الخامة | Sheet Nesting Engine",
+  "description": "محرك احترافي لتوزيع وقص ألواح الخشب وتوفير الخامة بخوارزمية MaxRects وتثبيت عروق الخشب (Wood Grain Lock) مع استيراد SVG وتصدير مخططات القص.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
