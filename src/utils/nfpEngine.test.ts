@@ -305,3 +305,22 @@ test('an omitted worker placement remains explicitly unplaced rather than counte
   assert.equal(result.summary.unplacedCount, 2);
   assert.equal(result.unplacedParts.length, 2);
 });
+
+test('cutouts require closed nested loops without islands or separate solids',()=>{
+  const part=(svgSnippet:string):PartInput=>({id:'compound',name:'compound',width:100,height:100,count:1,grain:'free',
+    originalBBox:{x:0,y:0,width:100,height:100},svgSnippet});
+  const holes=(snippet:string)=>buildNfpRequest([part(snippet)],sheetCfg()).parts[0].holes?.length??0;
+  assert.equal(holes('<path d="M0 0H100V100H0Z M10 10V90H90V10Z"/>'),1);
+  assert.equal(holes('<path d="M0 0H100V100H0Z M10 10V90H90V10"/>'),0,'open path is not a cutout');
+  assert.equal(holes('<path d="M0 0H40V40H0Z M60 60H100V100H60Z"/>'),0,'disconnected solids are not cutouts');
+  assert.equal(holes('<path d="M0 0H100V100H0Z M10 10V90H90V10Z M20 20H30V30H20Z"/>'),0,'preserve material islands');
+});
+
+
+test('longer time budgets schedule more search restarts while explicit limits win',()=>{
+  const parts:PartInput[]=[{id:'budget',name:'budget',width:30,height:40,count:1,grain:'free'}];
+  const short=buildNfpRequest(parts,sheetCfg(),1,{}, {budgetMs:5000});
+  const long=buildNfpRequest(parts,sheetCfg(),1,{}, {budgetMs:120000});
+  assert.ok(long.maxRestarts>short.maxRestarts);
+  assert.equal(buildNfpRequest(parts,sheetCfg(),1,{}, {budgetMs:600000,maxRestarts:7}).maxRestarts,7);
+});

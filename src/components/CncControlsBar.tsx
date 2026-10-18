@@ -20,7 +20,8 @@ import {
   Timer,
   RotateCw,
   Loader2,
-  AlertTriangle
+  AlertTriangle,
+  Play
 } from 'lucide-react';
 import { SheetConfig, SortStrategy } from '../utils/nesting';
 
@@ -40,8 +41,11 @@ interface CncControlsBarProps {
   onChangeNfpBudgetMs: (ms: number) => void;
   freeRotationCount: number;
   onChangeFreeRotationCount: (count: number) => void;
+  onStartNfp: () => void;
+  nfpCanStart: boolean;
+  nfpWaiting: boolean;
   nfpRunning?: boolean;
-  nfpProgress?: { placed: number; total: number } | null;
+  nfpProgress?: { placed: number; total: number; elapsedMs?: number } | null;
   nfpError?: string | null;
 }
 
@@ -59,6 +63,9 @@ export const CncControlsBar: React.FC<CncControlsBarProps> = ({
   onChangeNfpBudgetMs,
   freeRotationCount,
   onChangeFreeRotationCount,
+  onStartNfp,
+  nfpCanStart,
+  nfpWaiting,
   nfpRunning,
   nfpProgress,
   nfpError
@@ -315,7 +322,11 @@ export const CncControlsBar: React.FC<CncControlsBarProps> = ({
                 <option value={2000}>{isAr ? '2 ثانية (أسرع)' : '2s (fastest)'}</option>
                 <option value={5000}>{isAr ? '5 ثواني' : '5s'}</option>
                 <option value={10000}>{isAr ? '10 ثوانٍ' : '10s'}</option>
-                <option value={30000}>{isAr ? '30 ثانية (أدق)' : '30s (best)'}</option>
+                <option value={30000}>{isAr ? '30 ثانية' : '30s'}</option>
+                <option value={60000}>{isAr ? 'دقيقة' : '1 minute'}</option>
+                <option value={120000}>{isAr ? 'دقيقتان' : '2 minutes'}</option>
+                <option value={300000}>{isAr ? '5 دقائق' : '5 minutes'}</option>
+                <option value={600000}>{isAr ? '10 دقائق' : '10 minutes'}</option>
               </select>
             </div>
 
@@ -336,8 +347,15 @@ export const CncControlsBar: React.FC<CncControlsBarProps> = ({
                 <option value={8}>{isAr ? '8 زوايا (45°)' : '8 (45° steps)'}</option>
                 <option value={16}>{isAr ? '16 زاوية (22.5° — دقيق)' : '16 (22.5° — fine)'}</option>
                 <option value={32}>{isAr ? '32 زاوية (11.25° — أدق)' : '32 (11.25° — finer)'}</option>
+                <option value={64}>{isAr ? '64 زاوية (5.625°)' : '64 (5.625° steps)'}</option>
               </select>
             </div>
+            <button type="button" onClick={onStartNfp} disabled={nfpRunning || !nfpCanStart}
+              aria-label={isAr ? 'بدء تشغيل NFP' : 'Start NFP'}
+              className="self-end flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white font-bold text-sm hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed">
+              {nfpRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+              {isAr ? 'بدء' : 'Start'}
+            </button>
           </>
         )}
 
@@ -346,10 +364,10 @@ export const CncControlsBar: React.FC<CncControlsBarProps> = ({
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
             {nfpProgress
               ? isAr
-                ? `جاري التوزيع… ${nfpProgress.placed}/${nfpProgress.total}`
-                : `Nesting… ${nfpProgress.placed}/${nfpProgress.total}`
+                ? `جاري التحسين… ${nfpProgress.placed}/${nfpProgress.total} · ${Math.floor((nfpProgress.elapsedMs??0)/1000)} ث`
+                : `Optimizing… ${nfpProgress.placed}/${nfpProgress.total} · ${Math.floor((nfpProgress.elapsedMs??0)/1000)}s`
               : isAr
-                ? 'جاري التوزيع…'
+                ? 'جاري التحسين…'
                 : 'Nesting…'}
           </div>
         )}
@@ -357,7 +375,9 @@ export const CncControlsBar: React.FC<CncControlsBarProps> = ({
         {engineMode === 'nfp' && !nfpRunning && !nfpError && (
           <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
             <CheckCircle2 className="w-3.5 h-3.5" />
-            {isAr ? 'محرك NFP جاهز' : 'NFP engine active'}
+            {nfpWaiting
+              ? (isAr ? 'اختر الوقت والزوايا ثم اضغط بدء' : 'Choose time and rotations, then press Start')
+              : (isAr ? 'اكتمل بحث NFP' : 'NFP search complete')}
           </div>
         )}
 

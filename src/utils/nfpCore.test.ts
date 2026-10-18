@@ -336,7 +336,8 @@ test('dense mixed job: many parts place fast with no overlaps', () => {
   }
   for (let i = 0; i < 10; i++) parts.push(makeLPart(`L${i}`, [0, 90, 180, 270]));
   const t0 = Date.now();
-  const res = run(parts, sh, { budgetMs: 8000, maxRestarts: 2 });
+  // Leave room for the independent final geometry check and CI scheduling.
+  const res = run(parts, sh, { budgetMs: 6000, maxRestarts: 2 });
   const elapsed = Date.now() - t0;
   let placedCount = 0;
   for (const s of res.sheets) {
@@ -429,4 +430,46 @@ test('fast collision proxies contain the entire original curved outline', () => 
   checker.AddPath(enclosing, C.PolyType.ptClip, true);
   checker.Execute(C.ClipType.ctDifference, missing, C.PolyFillType.pftNonZero, C.PolyFillType.pftNonZero);
   assert.equal(missing.reduce((sum: number, path: any) => sum+Math.abs(C.Clipper.Area(path)), 0), 0);
+});
+
+test('repeated concave jobs preserve all instances, clearance and grain in every checkpoint', () => {
+  const parts = Array.from({length: 12}, (_,i) => ({
+    ...makeLPart(`repeat-${i}`, i%2 ? [0] : [0,90,180,270]),
+    // Identical geometry with different grain rules must not share angle masks.
+    shapeId: `grain-${i%2}`,
+  }));
+  const snapshots: ReturnType<typeof runGreedyNest>[] = [];
+  const req = {parts, sheet: sheet({sheetWidth:160,sheetHeight:100,sheetMargin:2,partGap:2}),
+    budgetMs:100, maxRestarts:1};
+  const raw = runGreedyNest({...deps,now:()=>0},req,undefined,r=>snapshots.push(r));
+  assert.equal(raw.unplacedUniqueIds.length,0);
+  assert.equal(raw.sheets.flatMap(s=>s.placements).length,12);
+  assert.ok(snapshots.length>=2);
+  for (let i=0;i<snapshots.length;i++) {
+    if (i) assert.ok(snapshots[i].score<=snapshots[i-1].score+1e-9);
+    const placed=snapshots[i].sheets.flatMap(s=>s.placements);
+    assert.equal(new Set(placed.map(p=>p.uniqueId)).size,12);
+    for (const p of placed) {
+      assert.ok(parts.find(q=>q.uniqueId===p.uniqueId)!.rotations.includes(p.rotationDeg));
+      assert.ok(p.x>=1.999 && p.y>=1.999 && p.x+p.width<=158.001 && p.y+p.height<=98.001);
+    }
+    for (const s of snapshots[i].sheets) for (let a=0;a<s.placements.length;a++) for (let b=0;b<a;b++) {
+      assert.ok(intersectionArea(offsetPoly(s.placements[a].contour,0.98),offsetPoly(s.placements[b].contour,0.98))<1e-5);
+    }
+  }
+});
+
+test('a part fits inside an enclosed cutout with clearance and the void is excluded from material area',()=>{
+  const ring={...makeRectPart('ring',100,100,[0]),holes:[[
+    {x:10,y:10},{x:10,y:90},{x:90,y:90},{x:90,y:10},
+  ]]};
+  const inside=makeRectPart('inside',60,60,[0]);
+  const raw=runGreedyNest({...deps,now:()=>0},{parts:[ring,inside],sheet:sheet({sheetWidth:100,sheetHeight:100,partGap:2}),budgetMs:100,maxRestarts:1});
+  assert.equal(raw.unplacedUniqueIds.length,0);
+  assert.equal(raw.sheets.length,1);
+  assert.equal(raw.sheets[0].placements.length,2);
+  const r=raw.sheets[0].placements.find(p=>p.uniqueId==='ring')!;
+  const p=raw.sheets[0].placements.find(p=>p.uniqueId==='inside')!;
+  assert.equal(r.holes?.length,1);assert.equal(r.area,3600);assert.equal(r.perimeter,720);
+  assert.ok(p.x>=11.99 && p.y>=11.99 && p.x+p.width<=88.01 && p.y+p.height<=88.01);
 });

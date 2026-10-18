@@ -59,7 +59,7 @@ class ControlledWorker {
   terminate() { this.terminated = true; }
   complete() {
     assert.ok(this.request && this.request.type === 'run');
-    const result = runGreedyNest(deps, { ...this.request.request, maxRestarts: 2 });
+    const result = runGreedyNest(deps, { ...this.request.request, budgetMs: Math.min(this.request.request.budgetMs,100), maxRestarts: 2 });
     if (!this.terminated) this.onmessage?.({ data: { type: 'done', result } });
   }
 }
@@ -109,16 +109,20 @@ test('React opens SVG import repeatedly and blocks export until current NFP sett
       assert.ok(close);
       await act(async () => { close.click(); });
     }
+    const workersBefore = ControlledWorker.workers.length;
     await act(async () => { button('أشكال حرة (NFP)').click(); });
+    assert.equal(ControlledWorker.workers.length,workersBefore);
+    await act(async () => { button('بدء').click(); });
     assert.equal(button('تصدير Inkscape SVG').disabled, true);
     const first = ControlledWorker.workers.at(-1)!;
     await act(async () => { first.complete(); });
     assert.equal(button('تصدير Inkscape SVG').disabled, false);
-    // Changing engine settings starts a distinct request; old output must not
-    // remain exportable even in the render before the effect starts the worker.
+    // Returning to NFP requires a fresh explicit Start; old output stays hidden.
     await act(async () => { button('مستطيلات').click(); });
     await act(async () => { button('أشكال حرة (NFP)').click(); });
+    assert.equal(ControlledWorker.workers.at(-1),first);
     assert.equal(button('تصدير Inkscape SVG').disabled, true);
+    await act(async () => { button('بدء').click(); });
     const second = ControlledWorker.workers.at(-1)!;
     assert.notEqual(first, second);
     await act(async () => { second.complete(); });
@@ -165,6 +169,7 @@ test('an incomplete NFP reply displays the remaining parts and blocks export', a
     await act(async () => { root.render(React.createElement(App)); });
     const nfp = [...container.querySelectorAll('button')].find(b => b.textContent?.includes('أشكال حرة (NFP)'))!;
     await act(async () => { nfp.click(); });
+    await act(async () => { (container.querySelector('[aria-label="بدء تشغيل NFP"]') as HTMLButtonElement).click(); });
     const worker = ControlledWorker.workers.at(-1)!;
     await act(async () => { worker.onmessage?.({ data: { type: 'done', result: {
       sheets: [], unplacedUniqueIds: [], score: 0, restartsRun: 1, elapsedMs: 0,
@@ -290,4 +295,58 @@ test('worker deadline returns the latest complete checkpoint and ignores late re
     assert.equal(snapshots.at(-1)!.result, settled);
     assert.equal(snapshots.at(-1)!.error, null);
   } finally { await act(async () => { root.unmount(); }); }
+});
+
+
+test('NFP Start uses selected settings, cancels on edits and can repeat identical input', async () => {
+  const container=document.getElementById('root')!,root=createRoot(container);
+  const start=()=>container.querySelector('[aria-label="بدء تشغيل NFP"]') as HTMLButtonElement;
+  const change=async (id:string,value:string) => { await act(async()=>{
+    const select=container.querySelector(id) as HTMLSelectElement;
+    select.value=value;select.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+  }); };
+  try {
+    await act(async()=>{root.render(React.createElement(App));});
+    const before=ControlledWorker.workers.length;
+    await act(async()=>{ [...container.querySelectorAll('button')].find(b=>b.textContent?.includes('أشكال حرة (NFP)'))!.click(); });
+    await change('#nfpBudgetMs','120000');await change('#nfpRotations','32');
+    assert.equal(ControlledWorker.workers.length,before);
+    await act(async()=>{start().click();});
+    const first=ControlledWorker.workers.at(-1)!;
+    assert.equal(first.request?.type,'run');
+    if(first.request?.type==='run') {
+      assert.equal(first.request.request.budgetMs,120000);
+      assert.ok(first.request.request.parts.every(p=>p.rotations.length===2 || p.rotations.length===32 || p.rotations.length===1));
+    }
+    assert.equal(start().disabled,true);
+    await change('#nfpBudgetMs','300000');
+    assert.equal(first.terminated,true);
+    assert.equal(ControlledWorker.workers.length,before+1);
+    assert.equal(start().disabled,false);
+    await act(async()=>{start().click();});
+    const second=ControlledWorker.workers.at(-1)!;
+    if(second.request?.type==='run') assert.equal(second.request.request.budgetMs,300000);
+    await act(async()=>{second.complete();});
+    assert.equal(start().disabled,false);
+    await act(async()=>{start().click();});
+    assert.equal(ControlledWorker.workers.length,before+3);
+    assert.notEqual(ControlledWorker.workers.at(-1),second);
+  } finally {await act(async()=>{root.unmount();});}
+});
+
+test('imported ring cutout survives NFP nesting and SVG/DXF/CSV export',()=>{
+  const source='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path id="ring" d="M0 0H100V100H0Z M10 10V90H90V10Z"/><path id="inside" d="M20 20H80V80H20Z"/></svg>';
+  const parts=parseSvgString(source,'free',1,'shapes').parts;
+  const cfg={sheetWidth:100,sheetHeight:100,sheetMargin:0,partGap:2};
+  const request=buildNfpRequest(parts,cfg);
+  assert.equal(request.parts[0].holes?.length,1);
+  const raw=runGreedyNest({...deps,now:()=>0},{...request,budgetMs:100,maxRestarts:1});
+  assert.equal(raw.sheets.length,1);
+  const result=rawResultToNestingResult(raw,parts,cfg);
+  const svg=generateInkscapeSvg(result.sheets[0]);
+  assert.equal(new DOMParser().parseFromString(svg,'image/svg+xml').querySelectorAll('path').length,2);
+  assert.match(svg,/M10 10V90H90V10Z/);
+  assert.equal(result.sheets[0].usedArea,7200);
+  assert.match(generateSheetDxf(result.sheets[0]),/ENTITIES/);
+  assert.equal(generateCutListCsv(result).trim().split('\r\n').length,3);
 });
