@@ -327,7 +327,8 @@ export function runGreedyNest(
   const shapeKey = (id: string) => shapeAliases.get(id) ?? id;
 
   const softDeadline = start + Math.max(req.budgetMs, 1);
-  const hardDeadline = softDeadline;
+  // Leave a small tail for final validation, result construction and delivery.
+  const hardDeadline = softDeadline-Math.min(250,Math.max(req.budgetMs,1)*0.02);
 
   // The sheet constraint uses the real contour. Expanded collision outlines
   // apply only between parts, independently of the sheet-edge margin.
@@ -823,6 +824,116 @@ export function runGreedyNest(
     return scoreOutcome(result) < scoreOutcome(input)-1e-10 && legalOutcome(result) ? result : input;
   };
 
+  // A conservative raster broad phase finds interlocking concave placements
+  // without computing a concave Minkowski union for every pair and angle.
+  // Raster cells cover the exact half-gap outline; candidates are still checked
+  // with the independent polygon validator before becoming the best layout.
+  const rasterOnce = (order: NfpPartRequest[], fine: boolean, cell: number, deadline: number): GreedyOutcome | null => {
+    const pad = 4;
+    const cols = Math.ceil((W-2*margin)/cell)+2*pad+4;
+    const rows = Math.ceil((H-2*margin)/cell)+2*pad+4;
+    const stride = Math.ceil(cols/32);
+    type Span = { y: number; left: number; right: number };
+    type Mask = { prep: PreparedShape; rot: number; spans: Span[] };
+    const masks = new Map<string, Mask[]>();
+    const getMasks = (part: NfpPartRequest): Mask[] => {
+      const key = `${shapeKey(part.shapeId)}|${part.rotations.join(",")}`;
+      const hit = masks.get(key);
+      if (hit) return hit;
+      let rotations = part.rotations.length ? part.rotations : [0];
+      if (!fine) {
+        const orthogonal = rotations.filter(r => Math.abs(r%90)<1e-7);
+        if (orthogonal.length) rotations = orthogonal;
+      }
+      const result: Mask[] = [];
+      for (const rot of rotations) {
+        const prep = prepFor(part,rot);
+        if (!prep || prep.rawB.width>W-2*margin || prep.rawB.height>H-2*margin) continue;
+        // Dilation by a cell's half diagonal includes every cell intersecting
+        // the half-gap polygon. Two disjoint masks therefore imply clearance.
+        const dilated = polygonOffset(C,prep.exactOff,cell/Math.SQRT2+0.02);
+        if (dilated.length!==1) continue;
+        const poly = dilated[0].map(p=>({x:p.x-prep.rawB.x,y:p.y-prep.rawB.y}));
+        const bounds = boundsOf(poly);
+        const spans: Span[] = [];
+        for (let y=Math.floor(bounds.y/cell);y<=Math.ceil((bounds.y+bounds.height)/cell);y++) {
+          const scan = (y+0.5)*cell, xs: number[] = [];
+          for (let i=0;i<poly.length;i++) {
+            const a=poly[i], b=poly[(i+1)%poly.length];
+            if ((a.y<=scan && b.y>scan)||(b.y<=scan && a.y>scan)) xs.push(a.x+(scan-a.y)*(b.x-a.x)/(b.y-a.y));
+          }
+          xs.sort((a,b)=>a-b);
+          for (let i=0;i+1<xs.length;i+=2) {
+            const left=Math.ceil(xs[i]/cell-0.5), right=Math.floor(xs[i+1]/cell-0.5);
+            if (right>=left) spans.push({y,left,right});
+          }
+        }
+        if (spans.length) result.push({prep,rot,spans});
+      }
+      // Examine short bounding envelopes first; every requested angle remains
+      // available in the fine pass, subject only to the user's time budget.
+      result.sort((a,b)=>a.prep.rawB.width*a.prep.rawB.height-b.prep.rawB.width*b.prep.rawB.height);
+      masks.set(key,result);
+      return result;
+    };
+    const outcome: GreedyOutcome = {sheets:[],pool:[]};
+    let remaining = order.slice();
+    while (remaining.length && outcome.sheets.length<MAX_SHEETS) {
+      const occupied = new Uint32Array(rows*stride);
+      const state: SheetState = {placed:[],unionOff:null};
+      let right=0,bottom=0;
+      const pending: NfpPartRequest[] = [];
+      const spanBits = (row: number, left: number, end: number, write: boolean): boolean => {
+        left=Math.max(0,left);end=Math.min(cols-1,end);
+        if (row<0 || row>=rows || left>end) return false;
+        const first=left>>>5,last=end>>>5,base=row*stride;
+        for (let word=first;word<=last;word++) {
+          const lo=word===first ? left&31 : 0, hi=word===last ? end&31 : 31;
+          const bits=(0xffffffff<<lo)&(0xffffffff>>>(31-hi));
+          if (write) occupied[base+word]|=bits;
+          else if (occupied[base+word]&bits) return true;
+        }
+        return false;
+      };
+      for (const part of remaining) {
+        if (now()>=deadline) return null;
+        let best: {mask:Mask;x:number;y:number;area:number;tie:number}|null=null;
+        for (const mask of getMasks(part)) {
+          if (now()>=deadline) return null;
+          const {width,height}=mask.prep.rawB;
+          const maxX=Math.floor((W-2*margin-width)/cell),maxY=Math.floor((H-2*margin-height)/cell);
+          for (let y=0;y<=maxY;y++) {
+            if (now()>=deadline) return null;
+            const nextBottom=Math.max(bottom,y*cell+height);
+            if (best && nextBottom*Math.max(right,width)>best.area+1e-8) break;
+            for (let x=0;x<=maxX;x++) {
+              const area=Math.max(right,x*cell+width)*nextBottom;
+              const tie=y*cols+x;
+              if (best && (area>best.area+1e-8 || (almostEqual(area,best.area)&&tie>=best.tie))) break;
+              let collision=false;
+              for (const span of mask.spans) {
+                if (spanBits(y+span.y+pad,x+span.left+pad,x+span.right+pad,false)) {collision=true;break;}
+              }
+              if (!collision) best={mask,x,y,area,tie};
+            }
+          }
+        }
+        if (!best) {pending.push(part);continue;}
+        const {mask,x,y}=best,prep=mask.prep;
+        const t={x:margin+x*cell-prep.rawB.x,y:margin+y*cell-prep.rawB.y};
+        const rawWorld=translatePoly(prep.raw,t),aabb=boundsOf(rawWorld);
+        state.placed.push({uniqueId:part.uniqueId,shapeId:part.shapeId,rot:mask.rot,t,prep,rawWorld,aabb});
+        for (const span of mask.spans) spanBits(y+span.y+pad,x+span.left+pad,x+span.right+pad,true);
+        right=Math.max(right,x*cell+prep.rawB.width);bottom=Math.max(bottom,y*cell+prep.rawB.height);
+        state.unionOff=mergeBounds(state.unionOff,{...prep.offB,x:prep.offB.x+t.x,y:prep.offB.y+t.y});
+      }
+      if (!state.placed.length) {outcome.pool=pending;break;}
+      outcome.sheets.push(state);remaining=pending;
+    }
+    if (remaining.length && !outcome.pool.length) outcome.pool=remaining;
+    return outcome;
+  };
+
   const buildResult = (o: GreedyOutcome, restartsRun: number): NfpCoreResult => {
     const sheetsOut: NfpSheetOut[] = [];
     let placementCounter = 0;
@@ -921,7 +1032,7 @@ export function runGreedyNest(
   const finish = (o: GreedyOutcome, method: 'baseline'|'compacted'|'nfp', restarts: number) => {
     const result = buildResult(o, restarts);
     result.layoutMethod = method;
-    result.optimizationTimedOut = now() >= softDeadline;
+    result.optimizationTimedOut = now() >= hardDeadline;
     result.baselineAreaMm2 = occupiedArea(baseline);
     result.occupiedAreaMm2 = occupiedArea(o);
     result.improvementPercent = result.baselineAreaMm2 > 0
@@ -946,18 +1057,39 @@ export function runGreedyNest(
       }
     }
   }
-  let best: GreedyOutcome = compactOutcome(seed, Math.min(softDeadline, start+req.budgetMs*0.4));
+  const useRaster = parts.length>=12 && parts.some(p=>p.contour.length>4);
+  let best: GreedyOutcome = useRaster ? seed
+    : compactOutcome(seed, Math.min(softDeadline, start+req.budgetMs*0.25));
   let bestScore = scoreOutcome(best);
   let bestMethod: 'baseline'|'compacted'|'nfp' = best === baseline ? 'baseline' : 'compacted';
   let restartsRun = 0;
   onCheckpoint?.(finish(best, bestMethod, restartsRun));
+
+  if (useRaster) {
+    const stages = [
+      {cell:3,fine:false,order:0,end:0.45}, {cell:2,fine:false,order:0,end:0.7},
+      {cell:2,fine:false,order:1,end:0.9}, {cell:2,fine:true,order:1,end:0.95},
+    ];
+    for (const {cell,fine,order,end} of stages) {
+      const deadline=Math.min(softDeadline,start+req.budgetMs*end);
+      if (now()>=deadline) continue;
+      const candidate=rasterOnce(orderParts(parts,order),fine,cell,deadline);
+      if (!candidate) continue;
+      const tightened=compactOutcome(candidate,Math.min(softDeadline,now()+req.budgetMs*0.08));
+      const score=scoreOutcome(tightened);
+      if (score<bestScore && legalOutcome(tightened)) {
+        best=tightened;bestScore=score;bestMethod='nfp';
+        onCheckpoint?.(finish(best,bestMethod,restartsRun));
+      }
+    }
+  }
 
   // Refine the complete seed first. Removing/reinserting small concave pieces
   // can use pockets that a new greedy run might not reach before its deadline.
   const byId = new Map(parts.map(p => [p.uniqueId, p]));
   const reinsertionOrder = parts.slice().sort((a,b) => a.contour.length-b.contour.length);
   for (const part of reinsertionOrder) {
-    if (now() >= start+req.budgetMs*0.65) break;
+    if (now() >= start+req.budgetMs*0.85) break;
     const trial: GreedyOutcome = { pool: best.pool.slice(), sheets: best.sheets.map(s => ({
       placed: s.placed.filter(p => p.uniqueId !== part.uniqueId), unionOff: null,
     })) };
@@ -972,7 +1104,7 @@ export function runGreedyNest(
     }
     if (!inserted) continue;
     trial.sheets = trial.sheets.filter(s => s.placed.length);
-    const tightened = compactOutcome(trial, Math.min(softDeadline, start+req.budgetMs*0.7));
+    const tightened = compactOutcome(trial, Math.min(softDeadline, start+req.budgetMs*0.9));
     const score = scoreOutcome(tightened);
     if (score < bestScore-1e-10 && legalOutcome(tightened)) { best=tightened; bestScore=score; bestMethod='nfp'; onCheckpoint?.(finish(best, bestMethod, restartsRun)); }
   }
@@ -987,7 +1119,8 @@ export function runGreedyNest(
     const strategy = r < STRATEGY_COUNT * 2 ? Math.floor(r / 2) : 99;
     const scoring: Scoring = r % 2 === 0 ? 'bbox' : 'gravity';
     const order = orderParts(parts, strategy, r + 1);
-    const outcome = compactOutcome(greedyOnce(order, r, scoring), softDeadline);
+    const greedy = greedyOnce(order, r, scoring);
+    const outcome = now()>=hardDeadline ? greedy : compactOutcome(greedy,hardDeadline);
     restartsRun++;
     const score = scoreOutcome(outcome);
     if (score < bestScore && legalOutcome(outcome)) {

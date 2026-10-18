@@ -25,7 +25,8 @@ assert.ok(parts.length > 0, 'No parts imported');
 const request = buildNfpRequest(parts, cfg, multiplier, {}, { budgetMs, freeRotationCount: angles });
 const start = performance.now();
 let checkpoints = 0;
-const raw = runGreedyNest(deps, request, undefined, () => { checkpoints++; });
+const history: Array<{elapsedMs:number;areaMm2:number|undefined}> = [];
+const raw = runGreedyNest(deps, request, undefined, r => { checkpoints++; history.push({elapsedMs:r.elapsedMs,areaMm2:r.occupiedAreaMm2}); });
 const wallMs = performance.now()-start;
 assert.equal(raw.unplacedUniqueIds.length, 0, 'Some pieces could not be placed');
 const placed = raw.sheets.flatMap(s => s.placements);
@@ -65,6 +66,6 @@ assert.equal(generateCutListCsv(result).trim().split('\r\n').length,placed.lengt
 assert.ok(wallMs <= budgetMs+1000, `Budget overrun: ${wallMs.toFixed(0)}ms`);
 console.log(JSON.stringify({settings:{...cfg,multiplier,budgetMs,angles},sourceParts:parts.length,
   placed:placed.length,unplaced:raw.unplacedUniqueIds.length,sheets:raw.sheets.length,wallMs:Math.round(wallMs),
-  checkpoints,method:raw.layoutMethod,baselineAreaMm2:raw.baselineAreaMm2,occupiedAreaMm2:raw.occupiedAreaMm2,
+  checkpoints,history,method:raw.layoutMethod,baselineAreaMm2:raw.baselineAreaMm2,occupiedAreaMm2:raw.occupiedAreaMm2,
   improvementPercent:raw.improvementPercent,exportedPaths,clearanceCheck:'passed (0.03mm tolerance)',
   perSheet:raw.sheets.map(s=>({count:s.placements.length,outerContourUtilizationPercent:s.placements.reduce((a,p)=>a+p.area,0)/(2370*1170)*100}))},null,2));
