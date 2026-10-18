@@ -26,7 +26,11 @@ const request = buildNfpRequest(parts, cfg, multiplier, {}, { budgetMs, freeRota
 const start = performance.now();
 let checkpoints = 0;
 const history: Array<{elapsedMs:number;areaMm2:number|undefined}> = [];
-const raw = runGreedyNest(deps, request, undefined, r => { checkpoints++; history.push({elapsedMs:r.elapsedMs,areaMm2:r.occupiedAreaMm2}); });
+const raw = runGreedyNest(deps, request, undefined, r => {
+  checkpoints++; history.push({elapsedMs:r.elapsedMs,areaMm2:r.occupiedAreaMm2});
+  console.error(JSON.stringify({best:checkpoints,elapsedMs:r.elapsedMs,sheets:r.sheets.length,
+    placed:r.sheets.reduce((a,s)=>a+s.placements.length,0),areaMm2:r.occupiedAreaMm2}));
+});
 const wallMs = performance.now()-start;
 assert.equal(raw.unplacedUniqueIds.length, 0, 'Some pieces could not be placed');
 const placed = raw.sheets.flatMap(s => s.placements);
@@ -38,18 +42,23 @@ for (const sheet of raw.sheets) {
   const grown = sheet.placements.map(p => {
     for (const pt of p.contour) assert.ok(pt.x >= 14.999 && pt.x <= 2385.001 && pt.y >= 14.999 && pt.y <= 1185.001, 'Out of bounds');
     const out = new C.Paths(), offset = new C.ClipperOffset(2, 10000);
-    offset.AddPath(p.contour.map(pt => ({ X: Math.round(pt.x*scale), Y: Math.round(pt.y*scale) })), C.JoinType.jtRound, C.EndType.etClosedPolygon);
+    const paths=[p.contour,...(p.holes??[])].map((loop,i)=>{
+      const path=loop.map(pt=>({X:Math.round(pt.x*scale),Y:Math.round(pt.y*scale)}));
+      if(C.Clipper.Orientation(path)!==(i===0))path.reverse();
+      return path;
+    });
+    offset.AddPaths(paths, C.JoinType.jtRound, C.EndType.etClosedPolygon);
     offset.Execute(out, (cfg.partGap/2-0.015)*scale);
-    assert.equal(out.length, 1);
-    const path = out[0] as Array<{ X: number; Y: number }>;
-    return { path, minX: Math.min(...path.map(p=>p.X)), maxX: Math.max(...path.map(p=>p.X)),
+    assert.ok(out.length>=1);
+    const path = (out as Array<Array<{X:number;Y:number}>>).flat();
+    return { paths:out, minX: Math.min(...path.map(p=>p.X)), maxX: Math.max(...path.map(p=>p.X)),
       minY: Math.min(...path.map(p=>p.Y)), maxY: Math.max(...path.map(p=>p.Y)) };
   });
   for (let i=0; i<grown.length; i++) for (let j=0; j<i; j++) {
     const a=grown[i], b=grown[j];
     if (a.maxX <= b.minX || b.maxX <= a.minX || a.maxY <= b.minY || b.maxY <= a.minY) continue;
     const clip=new C.Clipper(), overlap=new C.Paths();
-    clip.AddPath(a.path,C.PolyType.ptSubject,true);clip.AddPath(b.path,C.PolyType.ptClip,true);
+    clip.AddPaths(a.paths,C.PolyType.ptSubject,true);clip.AddPaths(b.paths,C.PolyType.ptClip,true);
     clip.Execute(C.ClipType.ctIntersection,overlap,C.PolyFillType.pftNonZero,C.PolyFillType.pftNonZero);
     assert.ok(overlap.reduce((sum: number,p: any)=>sum+Math.abs(C.Clipper.Area(p))/scale**2,0)<1e-4, `Clearance violated: ${i}/${j}`);
   }
@@ -65,7 +74,8 @@ for (const sheet of result.sheets) {
 assert.equal(generateCutListCsv(result).trim().split('\r\n').length,placed.length+1);
 assert.ok(wallMs <= budgetMs+1000, `Budget overrun: ${wallMs.toFixed(0)}ms`);
 console.log(JSON.stringify({settings:{...cfg,multiplier,budgetMs,angles},sourceParts:parts.length,
+  totalHoleCount:request.parts.reduce((a,p)=>a+(p.holes?.length??0),0),
   placed:placed.length,unplaced:raw.unplacedUniqueIds.length,sheets:raw.sheets.length,wallMs:Math.round(wallMs),
   checkpoints,history,method:raw.layoutMethod,baselineAreaMm2:raw.baselineAreaMm2,occupiedAreaMm2:raw.occupiedAreaMm2,
   improvementPercent:raw.improvementPercent,exportedPaths,clearanceCheck:'passed (0.03mm tolerance)',
-  perSheet:raw.sheets.map(s=>({count:s.placements.length,outerContourUtilizationPercent:s.placements.reduce((a,p)=>a+p.area,0)/(2370*1170)*100}))},null,2));
+  perSheet:raw.sheets.map(s=>({count:s.placements.length,materialUtilizationPercent:s.placements.reduce((a,p)=>a+p.area,0)/(2370*1170)*100}))},null,2));

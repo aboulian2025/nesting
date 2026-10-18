@@ -1,3 +1,4 @@
+import { RasterGrid } from './rasterGrid.ts';
 import { signedArea, convexHull } from './contour.ts';
 import { nestSheets, type PartInput } from './nesting.ts';
 import type {
@@ -45,11 +46,15 @@ interface ShapeLocal {
   raw: Pt[];
   off: Pt[];
   exactOff: Pt[];
+  holes: Pt[][];
+  solidOff: Pt[][];
 }
 
 interface PreparedShape {
   off: Pt[];
   exactOff: Pt[];
+  holes: Pt[][];
+  solidOff: Pt[][];
   raw: Pt[];
   offB: Bnds;
   rawB: Bnds;
@@ -317,9 +322,9 @@ export function runGreedyNest(
   const shapeAliases = new Map<string, string>();
   for (const part of req.parts) {
     // Match the integer geometry actually used by Clipper (one micron).
-    const geometry = JSON.stringify(part.contour.map(p => [
+    const geometry = JSON.stringify([part.contour,...(part.holes??[])].map(loop=>loop.map(p => [
       Math.round(p.x*CLIPPER_SCALE), Math.round(p.y*CLIPPER_SCALE),
-    ]));
+    ])));
     const id = geometryIds.get(geometry) ?? part.shapeId;
     geometryIds.set(geometry, id);
     shapeAliases.set(part.shapeId, id);
@@ -366,10 +371,24 @@ export function runGreedyNest(
       if (expanded.length === 1) off = expanded[0];
     }
     const exactOff = off;
+    const holes: Pt[][] = [];
+    for (const hole of part.holes??[]) {
+      if (hole.length<3) continue;
+      // Prove complete containment, including edges of concave holes.
+      const checker=new C.Clipper(),outside=new C.Paths();
+      const subject=toClipper(hole),outer=toClipper(raw);
+      C.JS.ScaleUpPath(subject,VALIDATION_SCALE);C.JS.ScaleUpPath(outer,VALIDATION_SCALE);
+      checker.AddPath(subject,C.PolyType.ptSubject,true);checker.AddPath(outer,C.PolyType.ptClip,true);
+      checker.Execute(C.ClipType.ctDifference,outside,C.PolyFillType.pftNonZero,C.PolyFillType.pftNonZero);
+      if (!outside.some((p:any)=>Math.abs(C.Clipper.Area(p))>1)) holes.push(hole);
+    }
+    const voids=holes.flatMap(h=>polygonOffset(C,h,-gap/2)).map(h=>
+      signedArea(h)*signedArea(exactOff)>0 ? h.slice().reverse() : h);
+    const solidOff=[exactOff,...voids];
     off = collisionProxy(C, off);
     if (G.polygonArea(off) > 0) off = off.map((p) => ({ x: p.x, y: p.y }));
     if (G.polygonArea(off) > 0) off.reverse();
-    const local: ShapeLocal = { raw, off, exactOff };
+    const local: ShapeLocal = { raw, off, exactOff, holes, solidOff };
     shapeLocal.set(id, local);
     return local;
   };
@@ -390,6 +409,8 @@ export function runGreedyNest(
     const prep: PreparedShape = {
       off,
       exactOff: rotatePoly(local.exactOff, rot),
+      holes: local.holes.map(h=>rotatePoly(h,rot)),
+      solidOff: local.solidOff.map(h=>rotatePoly(h,rot)),
       raw,
       offB: boundsOf(off),
       rawB: boundsOf(raw),
@@ -725,8 +746,8 @@ export function runGreedyNest(
   const legalOutcome = (outcome: GreedyOutcome): boolean => {
     for (const sheet of outcome.sheets) {
       const cached = sheet.placed.map(p => {
-        const clip = toClipper(translatePoly(p.prep.exactOff, p.t));
-        C.JS.ScaleUpPath(clip, VALIDATION_SCALE);
+        const clip = p.prep.solidOff.map(h=>toClipper(translatePoly(h,p.t)));
+        C.JS.ScaleUpPaths(clip, VALIDATION_SCALE);
         return { rec: p, clip };
       });
       for (let i = 0; i < cached.length; i++) {
@@ -739,8 +760,8 @@ export function runGreedyNest(
           const b = { x:other.prep.offB.x+other.t.x, y:other.prep.offB.y+other.t.y, width:other.prep.offB.width, height:other.prep.offB.height };
           if (a.x+a.width <= b.x || b.x+b.width <= a.x || a.y+a.height <= b.y || b.y+b.height <= a.y) continue;
           const intersection = new C.Paths(), checker = new C.Clipper();
-          checker.AddPath(clip, C.PolyType.ptSubject, true);
-          checker.AddPath(cached[j].clip, C.PolyType.ptClip, true);
+          checker.AddPaths(clip, C.PolyType.ptSubject, true);
+          checker.AddPaths(cached[j].clip, C.PolyType.ptClip, true);
           checker.Execute(C.ClipType.ctIntersection, intersection, C.PolyFillType.pftNonZero, C.PolyFillType.pftNonZero);
           if (intersection.some((path: any) => Math.abs(C.Clipper.Area(path)) > 1)) return false;
         }
@@ -765,22 +786,22 @@ export function runGreedyNest(
         for (const rec of order) {
           if (now() >= deadline) break;
           const fixed = sheet.placed.filter(p => p !== rec).map(p => {
-            const clip = toClipper(translatePoly(p.prep.exactOff, p.t));
-            C.JS.ScaleUpPath(clip, VALIDATION_SCALE);
+            const clip = p.prep.solidOff.map(h=>toClipper(translatePoly(h,p.t)));
+            C.JS.ScaleUpPaths(clip, VALIDATION_SCALE);
             return { clip, bounds: { ...p.prep.offB, x: p.prep.offB.x+p.t.x, y: p.prep.offB.y+p.t.y }, raw: p.aabb };
           });
           const legal = (t: Pt) => {
             const bounds = { ...rec.prep.offB, x: rec.prep.offB.x+t.x, y: rec.prep.offB.y+t.y };
-            let clip: ReturnType<typeof toClipper> | null = null;
+            let clip: Array<ReturnType<typeof toClipper>> | null = null;
             for (const other of fixed) {
               const b = other.bounds;
               if (bounds.x+bounds.width <= b.x || b.x+b.width <= bounds.x ||
                   bounds.y+bounds.height <= b.y || b.y+b.height <= bounds.y) continue;
-              if (!clip) { clip = toClipper(translatePoly(rec.prep.exactOff, t)); C.JS.ScaleUpPath(clip, VALIDATION_SCALE); }
+              if (!clip) { clip=rec.prep.solidOff.map(h=>toClipper(translatePoly(h,t))); C.JS.ScaleUpPaths(clip, VALIDATION_SCALE); }
               const intersection = new C.Paths();
               const checker = new C.Clipper();
-              checker.AddPath(clip, C.PolyType.ptSubject, true);
-              checker.AddPath(other.clip, C.PolyType.ptClip, true);
+              checker.AddPaths(clip, C.PolyType.ptSubject, true);
+              checker.AddPaths(other.clip, C.PolyType.ptClip, true);
               checker.Execute(C.ClipType.ctIntersection, intersection, C.PolyFillType.pftNonZero, C.PolyFillType.pftNonZero);
               if (intersection.some((p: any) => Math.abs(C.Clipper.Area(p)) > 1)) return false;
             }
@@ -832,7 +853,6 @@ export function runGreedyNest(
     const pad = 4;
     const cols = Math.ceil((W-2*margin)/cell)+2*pad+4;
     const rows = Math.ceil((H-2*margin)/cell)+2*pad+4;
-    const stride = Math.ceil(cols/32);
     type Span = { y: number; left: number; right: number };
     type Mask = { prep: PreparedShape; rot: number; spans: Span[] };
     const masks = new Map<string, Mask[]>();
@@ -853,12 +873,13 @@ export function runGreedyNest(
         // the half-gap polygon. Two disjoint masks therefore imply clearance.
         const dilated = polygonOffset(C,prep.exactOff,cell/Math.SQRT2+0.02);
         if (dilated.length!==1) continue;
-        const poly = dilated[0].map(p=>({x:p.x-prep.rawB.x,y:p.y-prep.rawB.y}));
-        const bounds = boundsOf(poly);
+        const polys=[dilated[0],...prep.solidOff.slice(1).flatMap(h=>polygonOffset(C,h,-cell/Math.SQRT2-0.02))]
+          .map(h=>h.map(p=>({x:p.x-prep.rawB.x,y:p.y-prep.rawB.y})));
+        const bounds = boundsOf(polys[0]);
         const spans: Span[] = [];
         for (let y=Math.floor(bounds.y/cell);y<=Math.ceil((bounds.y+bounds.height)/cell);y++) {
           const scan = (y+0.5)*cell, xs: number[] = [];
-          for (let i=0;i<poly.length;i++) {
+          for (const poly of polys) for (let i=0;i<poly.length;i++) {
             const a=poly[i], b=poly[(i+1)%poly.length];
             if ((a.y<=scan && b.y>scan)||(b.y<=scan && a.y>scan)) xs.push(a.x+(scan-a.y)*(b.x-a.x)/(b.y-a.y));
           }
@@ -879,22 +900,10 @@ export function runGreedyNest(
     const outcome: GreedyOutcome = {sheets:[],pool:[]};
     let remaining = order.slice();
     while (remaining.length && outcome.sheets.length<MAX_SHEETS) {
-      const occupied = new Uint32Array(rows*stride);
+      const occupied = new RasterGrid(cols,rows);
       const state: SheetState = {placed:[],unionOff:null};
       let right=0,bottom=0;
       const pending: NfpPartRequest[] = [];
-      const spanBits = (row: number, left: number, end: number, write: boolean): boolean => {
-        left=Math.max(0,left);end=Math.min(cols-1,end);
-        if (row<0 || row>=rows || left>end) return false;
-        const first=left>>>5,last=end>>>5,base=row*stride;
-        for (let word=first;word<=last;word++) {
-          const lo=word===first ? left&31 : 0, hi=word===last ? end&31 : 31;
-          const bits=(0xffffffff<<lo)&(0xffffffff>>>(31-hi));
-          if (write) occupied[base+word]|=bits;
-          else if (occupied[base+word]&bits) return true;
-        }
-        return false;
-      };
       for (const part of remaining) {
         if (now()>=deadline) return null;
         let best: {mask:Mask;x:number;y:number;area:number;tie:number}|null=null;
@@ -912,7 +921,13 @@ export function runGreedyNest(
               if (best && (area>best.area+1e-8 || (almostEqual(area,best.area)&&tie>=best.tie))) break;
               let collision=false;
               for (const span of mask.spans) {
-                if (spanBits(y+span.y+pad,x+span.left+pad,x+span.right+pad,false)) {collision=true;break;}
+                const block=occupied.lastOccupied(y+span.y+pad,x+span.left+pad,x+span.right+pad);
+                if (block>=0) {
+                  // This fixed occupied cell remains inside the moving span
+                  // until its left edge passes it. Skip only proven collisions.
+                  x=Math.max(x,block-pad-span.left);
+                  collision=true;break;
+                }
               }
               if (!collision) best={mask,x,y,area,tie};
             }
@@ -923,7 +938,9 @@ export function runGreedyNest(
         const t={x:margin+x*cell-prep.rawB.x,y:margin+y*cell-prep.rawB.y};
         const rawWorld=translatePoly(prep.raw,t),aabb=boundsOf(rawWorld);
         state.placed.push({uniqueId:part.uniqueId,shapeId:part.shapeId,rot:mask.rot,t,prep,rawWorld,aabb});
-        for (const span of mask.spans) spanBits(y+span.y+pad,x+span.left+pad,x+span.right+pad,true);
+        for (const span of mask.spans) occupied.fill(y+span.y+pad,x+span.left+pad,x+span.right+pad);
+        onProgress?.({restart:0,placed:outcome.sheets.reduce((a,s)=>a+s.placed.length,0)+state.placed.length,
+          total:order.length,elapsedMs:now()-start});
         right=Math.max(right,x*cell+prep.rawB.width);bottom=Math.max(bottom,y*cell+prep.rawB.height);
         state.unionOff=mergeBounds(state.unionOff,{...prep.offB,x:prep.offB.x+t.x,y:prep.offB.y+t.y});
       }
@@ -941,11 +958,11 @@ export function runGreedyNest(
       const st = o.sheets[si];
       const placements: NfpPlacementOut[] = [];
       for (const rec of st.placed) {
-        const area = Math.abs(signedArea(rec.prep.raw));
+        const area = Math.max(0,Math.abs(signedArea(rec.prep.raw))-rec.prep.holes.reduce((a,h)=>a+Math.abs(signedArea(h)),0));
         let perimeter = 0;
-        for (let i = 0; i < rec.prep.raw.length; i++) {
-          const a = rec.prep.raw[i];
-          const b = rec.prep.raw[(i + 1) % rec.prep.raw.length];
+        for (const loop of [rec.prep.raw,...rec.prep.holes]) for (let i = 0; i < loop.length; i++) {
+          const a = loop[i];
+          const b = loop[(i + 1) % loop.length];
           perimeter += Math.hypot(b.x - a.x, b.y - a.y);
         }
         placements.push({
@@ -959,6 +976,7 @@ export function runGreedyNest(
           tx: rec.t.x,
           ty: rec.t.y,
           contour: rec.rawWorld,
+          holes: rec.prep.holes.map(h=>translatePoly(h,rec.t)),
           area,
           perimeter,
         });
@@ -1057,8 +1075,8 @@ export function runGreedyNest(
       }
     }
   }
-  const useRaster = parts.length>=12 && parts.some(p=>p.contour.length>4);
-  let best: GreedyOutcome = useRaster ? seed
+  const useRaster = parts.some(p=>(p.holes?.length??0)>0) || (parts.length>=12 && parts.some(p=>p.contour.length>4));
+  let best: GreedyOutcome = useRaster && parts.length>=12 ? seed
     : compactOutcome(seed, Math.min(softDeadline, start+req.budgetMs*0.25));
   let bestScore = scoreOutcome(best);
   let bestMethod: 'baseline'|'compacted'|'nfp' = best === baseline ? 'baseline' : 'compacted';
@@ -1068,7 +1086,11 @@ export function runGreedyNest(
   if (useRaster) {
     const stages = [
       {cell:3,fine:false,order:0,end:0.45}, {cell:2,fine:false,order:0,end:0.7},
-      {cell:2,fine:false,order:1,end:0.9}, {cell:2,fine:true,order:1,end:0.95},
+      ...(req.budgetMs>=60000 ? [
+        {cell:1.5,fine:false,order:0,end:0.8},
+        {cell:1,fine:false,order:0,end:0.9},
+      ] : [{cell:2,fine:false,order:1,end:0.9}]),
+      {cell:2,fine:true,order:1,end:0.95},
     ];
     for (const {cell,fine,order,end} of stages) {
       const deadline=Math.min(softDeadline,start+req.budgetMs*end);

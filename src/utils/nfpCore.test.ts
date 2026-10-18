@@ -458,3 +458,18 @@ test('repeated concave jobs preserve all instances, clearance and grain in every
     }
   }
 });
+
+test('a part fits inside an enclosed cutout with clearance and the void is excluded from material area',()=>{
+  const ring={...makeRectPart('ring',100,100,[0]),holes:[[
+    {x:10,y:10},{x:10,y:90},{x:90,y:90},{x:90,y:10},
+  ]]};
+  const inside=makeRectPart('inside',60,60,[0]);
+  const raw=runGreedyNest({...deps,now:()=>0},{parts:[ring,inside],sheet:sheet({sheetWidth:100,sheetHeight:100,partGap:2}),budgetMs:100,maxRestarts:1});
+  assert.equal(raw.unplacedUniqueIds.length,0);
+  assert.equal(raw.sheets.length,1);
+  assert.equal(raw.sheets[0].placements.length,2);
+  const r=raw.sheets[0].placements.find(p=>p.uniqueId==='ring')!;
+  const p=raw.sheets[0].placements.find(p=>p.uniqueId==='inside')!;
+  assert.equal(r.holes?.length,1);assert.equal(r.area,3600);assert.equal(r.perimeter,720);
+  assert.ok(p.x>=11.99 && p.y>=11.99 && p.x+p.width<=88.01 && p.y+p.height<=88.01);
+});

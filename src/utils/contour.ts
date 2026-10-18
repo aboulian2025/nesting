@@ -254,7 +254,7 @@ function sampleArc(
  * تحليل سلسلة 'd' إلى حلقات نقاط
  * يدعم: M L H V C S Q T A Z (حروف كبيرة/صغيرة) مع الإسناد النسبي
  */
-export function pathDToLoops(d: string): ContourPoint[][] {
+export function pathDToLoops(d: string, closedOnly = false): ContourPoint[][] {
   if (!d || typeof d !== 'string') return [];
 
   const tokens = tokenizePath(d);
@@ -280,7 +280,7 @@ export function pathDToLoops(d: string): ContourPoint[][] {
   const flush = (close: boolean) => {
     if (current.length >= 2) {
       if (close) current = dedupePoints(current);
-      loops.push(current);
+      if (!closedOnly || close) loops.push(current);
     }
     current = [];
   };
@@ -669,7 +669,7 @@ export function transformSvgPoint(p: ContourPoint, m: SvgMatrix): ContourPoint {
   return { x: m[0]*p.x+m[2]*p.y+m[4], y: m[1]*p.x+m[3]*p.y+m[5] };
 }
 
-export function snippetToLoops(snippet: string): ContourPoint[][] {
+export function snippetToLoops(snippet: string, closedOnly = false): ContourPoint[][] {
   if (!snippet || typeof snippet !== 'string') return [];
   const loops: ContourPoint[][] = [];
   const stack: Array<{ tag: string; matrix: SvgMatrix }> = [{ tag: '', matrix: IDENTITY }];
@@ -686,7 +686,9 @@ export function snippetToLoops(snippet: string): ContourPoint[][] {
       attrs[attr[1].toLowerCase()] = attr[2] ?? attr[3];
     }
     const matrix = multiplySvgMatrices(stack[stack.length - 1].matrix, parseSvgTransform(attrs.transform || ''));
-    for (const loop of svgElementToLoops(tag, attrs)) {
+    const sourceLoops = closedOnly && tag==='path' ? pathDToLoops(attrs.d||'',true)
+      : closedOnly && (tag==='line'||tag==='polyline') ? [] : svgElementToLoops(tag, attrs);
+    for (const loop of sourceLoops) {
       const clean = dedupePoints(loop.map(p => transformSvgPoint(p, matrix)));
       // Open strokes and self-intersections can have zero signed area. Keep
       // their endpoints so the collision envelope contains all original art.

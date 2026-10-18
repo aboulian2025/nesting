@@ -9,7 +9,7 @@
  * - قفل عروق الخشب: أفقي=عرض \ رأسي=طول \ حر=تدوير حر للقطعة حسب المساحة
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { CncControlsBar } from './components/CncControlsBar';
 import { SheetCanvas } from './components/SheetCanvas';
@@ -39,10 +39,6 @@ import {
 import { INITIAL_PARTS } from './types';
 import { useUndoRedo, DocState } from './hooks/useUndoRedo';
 import { useNfpNesting } from './hooks/useNfpNesting';
-import {
-  DEFAULT_FREE_ROTATION_COUNT,
-  DEFAULT_NFP_BUDGET_MS,
-} from './utils/nfpEngine';
 
 export default function App() {
   const [language, setLanguage] = useState<'ar' | 'en'>('ar');
@@ -82,8 +78,8 @@ export default function App() {
   // محرك التوزيع: MaxRects (افتراضي) أو NFP للأشكال الحرة
   const [engineMode, setEngineMode] = useState<'rect' | 'nfp'>('rect');
   // NFP: ميزانية الوقت وزوايا الدوران الدقيقة
-  const [nfpBudgetMs, setNfpBudgetMs] = useState<number>(DEFAULT_NFP_BUDGET_MS);
-  const [freeRotationCount, setFreeRotationCount] = useState<number>(DEFAULT_FREE_ROTATION_COUNT);
+  const [nfpBudgetMs, setNfpBudgetMs] = useState<number>(60000);
+  const [freeRotationCount, setFreeRotationCount] = useState<number>(32);
   // النوافذ المنبثقة
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSvgModalOpen, setIsSvgModalOpen] = useState(false);
@@ -97,9 +93,17 @@ export default function App() {
     return nestSheets(parts, sheetConfig, sortStrategy, globalMultiplier, partOverrides);
   }, [parts, sheetConfig, sortStrategy, globalMultiplier, partOverrides]);
 
-  // محرك NFP للأشكال الحرة — يعمل في worker بميزانية زمنية وزوايا دوران دقيقة
+  // Editing inputs invalidates the last run. Only the explicit Start action
+  // captures the new configuration and starts a worker.
+  const nfpInputKey = JSON.stringify([engineMode,parts,sheetConfig,globalMultiplier,partOverrides,nfpBudgetMs,freeRotationCount]);
+  const [nfpRun,setNfpRun] = useState<{key:string;id:number}|null>(null);
+  const nfpRunSerial = useRef(0);
+  useEffect(() => { setNfpRun(null); }, [nfpInputKey]);
+  const nfpStarted = nfpRun?.key === nfpInputKey;
+  const startNfp = () => setNfpRun({key:nfpInputKey,id:++nfpRunSerial.current});
   const nfpNesting = useNfpNesting({
-    enabled: engineMode === 'nfp',
+    enabled: engineMode === 'nfp' && nfpStarted,
+    runId: nfpRun?.id,
     parts,
     sheetConfig,
     globalMultiplier,
@@ -578,10 +582,13 @@ export default function App() {
           onChangeNfpBudgetMs={setNfpBudgetMs}
           freeRotationCount={freeRotationCount}
           onChangeFreeRotationCount={setFreeRotationCount}
+          onStartNfp={startNfp}
+          nfpCanStart={rectNestingResult.summary.totalPartsProvided>0}
+          nfpWaiting={!nfpStarted}
           nfpRunning={nfpNesting.running}
           nfpProgress={
             nfpNesting.progress
-              ? { placed: nfpNesting.progress.placed, total: nfpNesting.progress.total }
+              ? { placed: nfpNesting.progress.placed, total: nfpNesting.progress.total, elapsedMs: nfpNesting.progress.elapsedMs }
               : null
           }
           nfpError={nfpNesting.error}

@@ -1,4 +1,4 @@
-import { contourToMm, rectContour, snippetToContour } from './contour.ts';
+import { contourToMm, rectContour, snippetToContour, snippetToLoops, signedArea, pointInContour } from './contour.ts';
 import type { NfpCoreResult, NfpPartRequest, NfpRunRequest, Pt } from './nfpTypes.ts';
 import {
   expandParts,
@@ -19,6 +19,9 @@ import {
 export const DEFAULT_FREE_ROTATION_COUNT = 16;
 export const DEFAULT_NFP_BUDGET_MS = 5000;
 export const DEFAULT_NFP_RESTARTS = 14;
+export function nfpRestartsForBudget(budgetMs:number):number {
+  return Math.max(DEFAULT_NFP_RESTARTS,Math.min(256,Math.ceil(budgetMs/5000)*4));
+}
 
 export interface NfpEngineOptions {
   freeRotationCount?: number;
@@ -98,6 +101,7 @@ export function buildNfpRequest(
 ): NfpRunRequest {
   const expanded = expandParts(parts, globalMultiplier, partOverrides);
   const contourCache = new Map<string, Pt[]>();
+  const holesCache = new Map<string, Pt[][]>();
 
   const requests: NfpPartRequest[] = expanded.map((p) => {
     const shapeId = `${p.id}|${p.width}x${p.height}`;
@@ -105,6 +109,17 @@ export function buildNfpRequest(
     if (!contour) {
       if (p.svgSnippet) {
         const raw = snippetToContour(p.svgSnippet);
+        const loops = snippetToLoops(p.svgSnippet);
+        const closed = new Set(snippetToLoops(p.svgSnippet,true).map(loop=>JSON.stringify(loop)));
+        const sourceOuter = loops.reduce((a,b)=>Math.abs(signedArea(a))>Math.abs(signedArea(b)) ? a : b,[] as Pt[]);
+        // A compound envelope may bridge separate solid pieces. Such an
+        // envelope cannot establish a cutout, and open strokes are never voids.
+        const singleClosedOuter = closed.has(JSON.stringify(sourceOuter)) &&
+          loops.every(loop=>loop===sourceOuter || loop.every(pt=>pointInContour(pt,sourceOuter)));
+        const holes = singleClosedOuter ? loops.filter(loop => loop!==sourceOuter && loop.length>=3 &&
+          closed.has(JSON.stringify(loop)) && signedArea(loop)*signedArea(sourceOuter)<0 &&
+          !loops.some(other=>other!==loop && other.length>0 && other.every(pt=>pointInContour(pt,loop)))) : [];
+        holesCache.set(shapeId,p.originalBBox ? holes.map(h=>contourToMm(h,p.originalBBox!,p.width,p.height)) : []);
         contour =
           raw.length >= 3 && p.originalBBox
             ? contourToMm(raw, p.originalBBox, p.width, p.height)
@@ -120,6 +135,7 @@ export function buildNfpRequest(
       shapeId,
       name: p.name,
       contour,
+      holes: holesCache.get(shapeId),
       width: p.width,
       height: p.height,
       rotations: computeNfpRotations(p, isRect, opts.freeRotationCount, contour.length),
@@ -142,7 +158,7 @@ export function buildNfpRequest(
       pricePerSheet: sheetConfig.pricePerSheet,
     },
     budgetMs: opts.budgetMs ?? DEFAULT_NFP_BUDGET_MS,
-    maxRestarts: opts.maxRestarts ?? DEFAULT_NFP_RESTARTS,
+    maxRestarts: opts.maxRestarts ?? nfpRestartsForBudget(opts.budgetMs ?? DEFAULT_NFP_BUDGET_MS),
   };
 }
 

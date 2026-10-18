@@ -3,7 +3,7 @@ import {
   buildNfpRequest,
   rawResultToNestingResult,
   DEFAULT_NFP_BUDGET_MS,
-  DEFAULT_NFP_RESTARTS,
+  nfpRestartsForBudget,
   DEFAULT_FREE_ROTATION_COUNT,
 } from '../utils/nfpEngine.ts';
 import type {
@@ -23,6 +23,7 @@ export interface UseNfpNestingParams {
   budgetMs?: number;
   freeRotationCount?: number;
   maxRestarts?: number;
+  runId?: number;
 }
 
 export interface UseNfpNestingState {
@@ -40,13 +41,14 @@ export interface UseNfpNestingState {
 export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
   const {
     enabled,
+    runId,
     parts,
     sheetConfig,
     globalMultiplier,
     partOverrides,
     budgetMs = DEFAULT_NFP_BUDGET_MS,
     freeRotationCount = DEFAULT_FREE_ROTATION_COUNT,
-    maxRestarts = DEFAULT_NFP_RESTARTS,
+    maxRestarts = nfpRestartsForBudget(budgetMs),
   } = params;
 
   const [result, setResult] = useState<NestingResult | null>(null);
@@ -61,7 +63,7 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
   const overridesKey = JSON.stringify(partOverrides);
   const sheetKey = JSON.stringify(sheetConfig);
   const requestKey = JSON.stringify([enabled, partsKey, overridesKey, sheetKey,
-    globalMultiplier, budgetMs, freeRotationCount, maxRestarts]);
+    globalMultiplier, budgetMs, freeRotationCount, maxRestarts, runId]);
 
   useEffect(() => {
     if (!enabled) {
@@ -172,6 +174,7 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
     budgetMs,
     freeRotationCount,
     maxRestarts,
+    runId,
   ]);
 
   const isCurrent = settledKey === requestKey;

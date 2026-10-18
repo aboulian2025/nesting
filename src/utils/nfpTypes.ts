@@ -8,6 +8,7 @@ export interface NfpPartRequest {
   shapeId: string;
   name: string;
   contour: Pt[];
+  holes?: Pt[][];
   width: number;
   height: number;
   rotations: number[];
@@ -46,6 +47,7 @@ export interface NfpPlacementOut {
   tx: number;
   ty: number;
   contour: Pt[];
+  holes?: Pt[][];
   area: number;
   perimeter: number;
 }

@@ -43,7 +43,11 @@ ctx.onmessage = async (ev: MessageEvent<NfpWorkerIn>) => {
   if (!msg || msg.type !== 'run') return;
   try {
     const deps = await loadVendor();
+    let lastProgressAt=0;
     const result = runGreedyNest(deps, msg.request, (progress) => {
+      const time=performance.now();
+      if (time-lastProgressAt<100 && progress.placed!==progress.total) return;
+      lastProgressAt=time;
       ctx.postMessage({ type: 'progress', progress });
     }, (result) => ctx.postMessage({ type: 'checkpoint', result }));
     ctx.postMessage({ type: 'done', result });
