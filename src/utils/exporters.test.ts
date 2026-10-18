@@ -96,3 +96,109 @@ test('generateInkscapeSvg: generates valid Inkscape SVG with proper layers and n
   assert.ok(svg.includes('translate(-50, -50)'));
   assert.ok(svg.includes('rotate(90)'));
 });
+
+test('generateInkscapeSvg: NFP contour-only parts render as <polygon> in sheet coords', () => {
+  const dummySheet: SheetStats = {
+    sheetIndex: 1,
+    sheetWidth: 1000,
+    sheetHeight: 800,
+    sheetMargin: 15,
+    partGap: 4,
+    placedParts: [
+      {
+        uniqueId: 'nfp_0',
+        id: 'nfp1',
+        name: 'قطعة NFP',
+        width: 40,
+        height: 40,
+        originalWidth: 40,
+        originalHeight: 40,
+        x: 20,
+        y: 20,
+        rotated: false,
+        grain: GrainDirection.FREE,
+        color: '#FF0000',
+        contour: [
+          { x: 20, y: 20 },
+          { x: 60, y: 20 },
+          { x: 60, y: 60 },
+          { x: 20, y: 60 },
+        ],
+        rotationDeg: 0,
+        worldTx: 20,
+        worldTy: 20,
+      },
+    ],
+    usedArea: 1600,
+    totalArea: 1000 * 800,
+    wasteArea: 1000 * 800 - 1600,
+    usableArea: (1000 - 30) * (800 - 30),
+    wastePercent: 99.8,
+    estimatedCutLengthMeters: 0.16,
+    utilizationPercent: 0.2,
+    placedCount: 1,
+  };
+
+  const svg = generateInkscapeSvg(dummySheet);
+
+  assert.ok(svg.includes('<polygon'), 'contour part must render as <polygon>');
+  assert.ok(
+    svg.includes('points="20.000,20.000 60.000,20.000 60.000,60.000 20.000,60.000"'),
+    `polygon points must be sheet coords`,
+  );
+});
+
+test('generateInkscapeSvg: imported NFP parts keep their real paths (holes included) via general transform', () => {
+  const dummySheet: SheetStats = {
+    sheetIndex: 1,
+    sheetWidth: 1000,
+    sheetHeight: 800,
+    sheetMargin: 15,
+    partGap: 4,
+    placedParts: [
+      {
+        uniqueId: 'nfp_1',
+        id: 'nfp2',
+        name: 'شكل مثقوب',
+        width: 100,
+        height: 100,
+        originalWidth: 100,
+        originalHeight: 100,
+        x: 20,
+        y: 20,
+        rotated: false,
+        grain: GrainDirection.FREE,
+        color: '#FF0000',
+        svgSnippet:
+          '<path d="M 0 0 L 100 0 L 100 100 L 0 100 Z M 30 30 L 30 70 L 70 70 L 70 30 Z" stroke="#FF0000" fill="none" />',
+        originalBBox: { x: 0, y: 0, width: 100, height: 100 },
+        contour: [
+          { x: 20, y: 20 },
+          { x: 120, y: 20 },
+          { x: 120, y: 120 },
+          { x: 20, y: 120 },
+        ],
+        rotationDeg: 30,
+        worldTx: 20,
+        worldTy: 20,
+      },
+    ],
+    usedArea: 10000,
+    totalArea: 1000 * 800,
+    wasteArea: 1000 * 800 - 10000,
+    usableArea: (1000 - 30) * (800 - 30),
+    wastePercent: 98.7,
+    estimatedCutLengthMeters: 0.4,
+    utilizationPercent: 1.3,
+    placedCount: 1,
+  };
+
+  const svg = generateInkscapeSvg(dummySheet);
+
+  assert.ok(!svg.includes('<polygon'), 'imported NFP part must NOT collapse to a polygon');
+  assert.ok(svg.includes('M 30 30'), 'inner hole subpath must be preserved');
+  assert.ok(
+    svg.includes('translate(20.000, 20.000) rotate(30) translate(0, 0)'),
+    `general NFP transform missing, got: ${svg.match(/translate\([^"]*\)/)?.[0]}`,
+  );
+});

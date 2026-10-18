@@ -172,19 +172,52 @@ export const StatisticsPanel: React.FC<StatisticsPanelProps> = ({
       </div>
 
       {/* تحذير في حال وجود قطع لم تتسع */}
-      {unplacedParts.length > 0 && (
-        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1">
-          <div className="font-bold flex items-center gap-1.5 text-rose-900">
-            <AlertTriangle className="w-4 h-4 text-rose-600" />
-            <span>
-              {isAr ? `تنبيه: يوجد ${unplacedParts.length} قطع أكبر من أبعاد اللوح أو الهامش!` : `Warning: ${unplacedParts.length} parts exceed sheet usable area!`}
-            </span>
+      {unplacedParts.length > 0 && (() => {
+        const usableW = Math.max(0, (config.sheetWidth || 0) - 2 * (config.sheetMargin || 0));
+        const usableH = Math.max(0, (config.sheetHeight || 0) - 2 * (config.sheetMargin || 0));
+        const oversized = unplacedParts.filter(
+          (p) =>
+            !(
+              (p.width <= usableW && p.height <= usableH) ||
+              (p.height <= usableW && p.width <= usableH)
+            ),
+        );
+        const notFitted = unplacedParts.filter((p) => !oversized.includes(p));
+        return (
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1">
+            {oversized.length > 0 && (
+              <>
+                <div className="font-bold flex items-center gap-1.5 text-rose-900">
+                  <AlertTriangle className="w-4 h-4 text-rose-600" />
+                  <span>
+                    {isAr
+                      ? `تنبيه: يوجد ${oversized.length} قطع أكبر من أبعاد اللوح أو الهامش!`
+                      : `Warning: ${oversized.length} parts exceed sheet usable area!`}
+                  </span>
+                </div>
+                <div className="text-[11px] text-rose-700">
+                  {oversized.map(p => `${p.name} (${p.width}×${p.height} مم)`).join(' ، ')}
+                </div>
+              </>
+            )}
+            {notFitted.length > 0 && (
+              <>
+                <div className="font-bold flex items-center gap-1.5 text-rose-900">
+                  <AlertTriangle className="w-4 h-4 text-rose-600" />
+                  <span>
+                    {isAr
+                      ? `${notFitted.length} قطع لم تُسكن (تعارض مع أشكال مجاورة أو انتهاء ميزانية الوقت)`
+                      : `${notFitted.length} parts not placed (conflicts or time budget exhausted)`}
+                  </span>
+                </div>
+                <div className="text-[11px] text-rose-700">
+                  {notFitted.map(p => `${p.name} (${p.width}×${p.height} مم)`).join(' ، ')}
+                </div>
+              </>
+            )}
           </div>
-          <div className="text-[11px] text-rose-700">
-            {unplacedParts.map(p => `${p.name} (${p.width}×${p.height} مم)`).join(' ، ')}
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* نصيحة ذكية لتقليل الهدر */}
       <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs flex items-start gap-2.5">

@@ -5,9 +5,9 @@
  */
 
 export const GrainDirection = {
-  WIDTH: 'width',   // أفقي = عرض اللوح (يمنع الدوران وتوازي العرض)
-  HEIGHT: 'height', // رأسي = طول اللوح (تدوير رأسي 90 درجة لموازاة الطول)
-  FREE: 'free'      // حر = تدوير حر للقطعة حسب المساحة لتقليل الهدر
+  WIDTH: 'width',   // أفقي = عرض (محاذاة العرض أفقياً، يمنع الدوران)
+  HEIGHT: 'height', // رأسي = طول (محاذاة الطول رأسياً، تدوير إلزامي 90 درجة)
+  FREE: 'free'      // حر = تدوير حر للقطعة حسب المساحة لتقليل الهدر واستغلال الفراغات
 } as const;
 
 export type GrainDirectionType = typeof GrainDirection[keyof typeof GrainDirection];
@@ -17,6 +17,7 @@ export interface IndividualPartOverride {
   grain?: GrainDirectionType;
   customWidth?: number;
   customHeight?: number;
+  hidden?: boolean; // إخفاء أو حذف القطعة الفردية دون حذف بقية الصنف
 }
 
 export interface PartInput {
@@ -53,11 +54,18 @@ export interface PlacedPart {
   svgSnippet?: string;
   viewBox?: string;
   originalBBox?: { x: number; y: number; width: number; height: number };
+  /** الكنتور الحقيقي (نظام إحداثيات اللوح بالمم) — يضبطه محرك NFP غير المنتظم فقط */
+  contour?: { x: number; y: number }[];
+  /** زاوية التدوير الفعلية بالدرجات (0-360) — محرك NFP فقط؛ المحرك المستطيلات يتجاهله */
+  rotationDeg?: number;
+  /** إزاحة أصل القطعة المحلي على اللوح — محرك NFP فقط؛ لإعادة بناء تحويل الـ snippet الحقيقي */
+  worldTx?: number;
+  worldTy?: number;
 }
 
 export interface SheetConfig {
-  sheetWidth: number;   // e.g. 2440 mm
-  sheetHeight: number;  // e.g. 1220 mm
+  sheetWidth: number;   // افتراضياً 2400 مم (عرض اللوح المخصص)
+  sheetHeight: number;  // افتراضياً 1200 مم (ارتفاع اللوح المخصص)
   sheetMargin: number;  // e.g. 15 mm
   partGap: number;      // e.g. 4 mm (saw blade kerf)
   materialName?: string;
@@ -207,6 +215,10 @@ export class SheetBin {
       case 'y':
       case 'vertical':
         // رأسي = طول اللوح: تدوير القطعة 90 درجة لتوازي طول/ارتفاع اللوح Y
+        // القطعة المربعة لا حاجة لتدويرها (نفس الأبعاد في الحالتين)
+        if (w === h) {
+          return [{ w, h, rotated: false }];
+        }
         return [{ w: h, h: w, rotated: true }];
 
       case GrainDirection.FREE:
@@ -224,8 +236,9 @@ export class SheetBin {
 
   /**
    * تقييم مدى ملاءمة القطعة للفراغات الحالية في اللوح لحساب Best Fit
+   * الترتيب الحدوي: المعيار الأساسي أولاً، ثم المساحة الحرة الأضيق (استغلال أفضل)، ثم القرب من الركن
    */
-  scorePlacement(part: PartInput & { uniqueId: string }): number | null {
+  scorePlacement(part: PartInput & { uniqueId: string }, heuristic: 'BSSF' | 'BAF' | 'BLSF' = 'BSSF'): number | null {
     const orientations = this.getAllowedOrientations(part);
     if (orientations.length === 0) return null;
 
@@ -238,9 +251,21 @@ export class SheetBin {
           if (free.x + w <= this.usableMaxX && free.y + h <= this.usableMaxY) {
             const leftoverX = free.width - w;
             const leftoverY = free.height - h;
-            const shortSideFit = Math.min(leftoverX, leftoverY);
+            let primaryFit: number;
+            if (heuristic === 'BAF') {
+              // Best Area Fit: يقلل المساحة المتبقية غير المستغلة في المستطيل الحر
+              primaryFit = free.width * free.height - w * h;
+            } else if (heuristic === 'BLSF') {
+              // Best Long Side Fit
+              primaryFit = Math.max(leftoverX, leftoverY);
+            } else {
+              // Best Short Side Fit
+              primaryFit = Math.min(leftoverX, leftoverY);
+            }
+            // معايير ثانوية: الفراغ الأضيق (استغلال أنسب) ثم القرب من الركن الأعلى يسار
+            const secondary = free.width * free.height * 1e-6;
             const tieBreaker = (free.y * 1000 + free.x) / 100000;
-            const score = shortSideFit + tieBreaker;
+            const score = primaryFit + secondary + tieBreaker;
             if (score < bestScore) {
               bestScore = score;
             }
@@ -253,13 +278,15 @@ export class SheetBin {
   }
 
   /**
-   * محاولة إدراج القطعة وفق معيار Best Short Side Fit (BSSF)
+   * محاولة إدراج القطعة وفق معيار الملاءمة المختار (BSSF أو BAF أو BLSF)
    */
-  insert(part: PartInput & { uniqueId: string }): PlacedPart | null {
+  insert(part: PartInput & { uniqueId: string }, heuristic: 'BSSF' | 'BAF' | 'BLSF' = 'BSSF'): PlacedPart | null {
     const orientations = this.getAllowedOrientations(part);
     if (orientations.length === 0) return null;
 
     let bestScore = Infinity;
+    let bestFreeArea = Infinity;
+    let bestTieBreaker = Infinity;
     let bestPlacement: {
       x: number;
       y: number;
@@ -277,14 +304,29 @@ export class SheetBin {
           if (free.x + w <= this.usableMaxX && free.y + h <= this.usableMaxY) {
             const leftoverX = free.width - w;
             const leftoverY = free.height - h;
-            const shortSideFit = Math.min(leftoverX, leftoverY);
+            const freeArea = free.width * free.height;
+            let primaryFit: number;
+            if (heuristic === 'BAF') {
+              primaryFit = freeArea - w * h;
+            } else if (heuristic === 'BLSF') {
+              primaryFit = Math.max(leftoverX, leftoverY);
+            } else {
+              primaryFit = Math.min(leftoverX, leftoverY);
+            }
 
             // نفضل الموضع الأقرب للركن (y ثم x) لتقليل التشتت إذا تساوى المعيار
             const tieBreaker = (free.y * 10000 + free.x) / 1000000;
-            const currentScore = shortSideFit + tieBreaker;
 
-            if (currentScore < bestScore) {
-              bestScore = currentScore;
+            // مقارنة حدوية: المعيار الأساسي، ثم الفراغ الأضيق (استغلال أنسب للمساحة)، ثم الركن
+            const isBetter =
+              primaryFit < bestScore ||
+              (primaryFit === bestScore && freeArea < bestFreeArea) ||
+              (primaryFit === bestScore && freeArea === bestFreeArea && tieBreaker < bestTieBreaker);
+
+            if (isBetter) {
+              bestScore = primaryFit;
+              bestFreeArea = freeArea;
+              bestTieBreaker = tieBreaker;
               bestPlacement = {
                 x: free.x,
                 y: free.y,
@@ -402,7 +444,16 @@ export class SheetBin {
   }
 }
 
-export type SortStrategy = 'optimal' | 'maxDimension' | 'area' | 'perimeter' | 'width' | 'height' | 'original';
+export type SortStrategy =
+  | 'optimal'
+  | 'maxDimension'
+  | 'area'
+  | 'perimeter'
+  | 'width'
+  | 'height'
+  | 'minDimension'
+  | 'aspectRatio'
+  | 'original';
 
 /**
  * دالة مساعدة لتعبئة الألواح بنظام Sheet-First التتابعي الأقصى:
@@ -411,7 +462,8 @@ export type SortStrategy = 'optimal' | 'maxDimension' | 'area' | 'perimeter' | '
 function packSequentialSheets(
   parts: (PartInput & { uniqueId: string })[],
   sheetConfig: SheetConfig,
-  strictOrder = false
+  strictOrder = false,
+  heuristic: 'BSSF' | 'BAF' | 'BLSF' = 'BSSF'
 ): { sheets: SheetBin[]; unplacedParts: PartInput[] } {
   const pool = [...parts];
   const sheets: SheetBin[] = [];
@@ -426,10 +478,11 @@ function packSequentialSheets(
       placedAny = false;
 
       if (strictOrder) {
-        // في الترتيب الصارم: نتبع ترتيب القائمة بدقة ونسكن أول قطعة ملائمة استجابة لاختيار المستخدم
+        // في الترتيب الصارم: نتبع ترتيب القائمة ونسكن أول قطعة ملائمة استجابة مباشرة لأولوية الترتيب
+        // وإذا لم تتسع القطعة التالية، يتم ملء الفراغات الشاغرة بالقطع الأصغر اللاحقة في نفس الترتيب
         for (let i = 0; i < pool.length; i++) {
           const candidate = pool[i];
-          if (sheet.insert(candidate)) {
+          if (sheet.insert(candidate, heuristic)) {
             pool.splice(i, 1);
             placedAny = true;
             break;
@@ -442,7 +495,7 @@ function packSequentialSheets(
 
         for (let i = 0; i < pool.length; i++) {
           const candidate = pool[i];
-          const score = sheet.scorePlacement(candidate);
+          const score = sheet.scorePlacement(candidate, heuristic);
           if (score !== null && score < bestPartScore) {
             bestPartScore = score;
             bestPartIndex = i;
@@ -452,7 +505,7 @@ function packSequentialSheets(
 
         if (bestPartIndex !== -1) {
           const candidate = pool[bestPartIndex];
-          if (sheet.insert(candidate)) {
+          if (sheet.insert(candidate, heuristic)) {
             pool.splice(bestPartIndex, 1);
             placedAny = true;
           }
@@ -473,7 +526,47 @@ function packSequentialSheets(
 }
 
 /**
+ * حساب الأبعاد الفعالة للقطعة عند الترتيب بناءً على قفل عروق الخشب:
+ * - أفقي (WIDTH): الأبعاد كما هي بدون تدوير
+ * - رأسي (HEIGHT): العرض والطول متبادلان (تدوير 90 درجة إلزامي)
+ * - حر (FREE): وضع الضلع الأطول أفقياً كأفضل توجيه مبدئي
+ * - التحكم الفردي بالتدوير يسبق قفل العروق
+ */
+function getEffectiveDims(part: {
+  width: number;
+  height: number;
+  grain?: GrainDirectionType;
+  overrideRotated?: boolean;
+}): { effWidth: number; effHeight: number } {
+  if (part.overrideRotated !== undefined) {
+    return part.overrideRotated
+      ? { effWidth: part.height, effHeight: part.width }
+      : { effWidth: part.width, effHeight: part.height };
+  }
+
+  const grain = (part.grain || GrainDirection.FREE).toLowerCase();
+
+  switch (grain) {
+    case GrainDirection.HEIGHT:
+    case 'y':
+    case 'vertical':
+      return { effWidth: part.height, effHeight: part.width };
+    case GrainDirection.FREE:
+    case 'free':
+      return part.width < part.height
+        ? { effWidth: part.height, effHeight: part.width }
+        : { effWidth: part.width, effHeight: part.height };
+    case GrainDirection.WIDTH:
+    case 'x':
+    case 'horizontal':
+    default:
+      return { effWidth: part.width, effHeight: part.height };
+  }
+}
+
+/**
  * ترتيب القطع حسب دالة ترتيب محددة
+ * الترتيب يتم على الأبعاد الفعالة بعد مراعاة قفل عروق الخشب لكل قطعة
  */
 function sortPartsBy(
   parts: (PartInput & { uniqueId: string })[],
@@ -481,27 +574,76 @@ function sortPartsBy(
 ): (PartInput & { uniqueId: string })[] {
   const copy = [...parts];
   copy.sort((a, b) => {
+    const aDims = getEffectiveDims(a);
+    const bDims = getEffectiveDims(b);
+    const areaA = aDims.effWidth * aDims.effHeight;
+    const areaB = bDims.effWidth * bDims.effHeight;
+
     switch (strategy) {
       case 'maxDimension': {
-        const maxA = Math.max(a.width, a.height);
-        const maxB = Math.max(b.width, b.height);
-        return maxB - maxA || (b.width * b.height) - (a.width * a.height);
+        const maxA = Math.max(aDims.effWidth, aDims.effHeight);
+        const maxB = Math.max(bDims.effWidth, bDims.effHeight);
+        return maxB - maxA || areaB - areaA;
       }
       case 'perimeter': {
-        const perimA = 2 * (a.width + a.height);
-        const perimB = 2 * (b.width + b.height);
-        return perimB - perimA || (b.width * b.height) - (a.width * a.height);
+        const perimA = 2 * (aDims.effWidth + aDims.effHeight);
+        const perimB = 2 * (bDims.effWidth + bDims.effHeight);
+        return perimB - perimA || areaB - areaA;
       }
       case 'width':
-        return b.width - a.width || b.height - a.height;
+        return bDims.effWidth - aDims.effWidth || bDims.effHeight - aDims.effHeight;
       case 'height':
-        return b.height - a.height || b.width - a.width;
+        return bDims.effHeight - aDims.effHeight || bDims.effWidth - aDims.effWidth;
+      case 'minDimension': {
+        const minA = Math.min(aDims.effWidth, aDims.effHeight);
+        const minB = Math.min(bDims.effWidth, bDims.effHeight);
+        return minB - minA || areaB - areaA;
+      }
+      case 'aspectRatio': {
+        const ratioA = Math.max(aDims.effWidth, aDims.effHeight) / Math.max(1, Math.min(aDims.effWidth, aDims.effHeight));
+        const ratioB = Math.max(bDims.effWidth, bDims.effHeight) / Math.max(1, Math.min(bDims.effWidth, bDims.effHeight));
+        return ratioB - ratioA || areaB - areaA;
+      }
       case 'area':
       default:
-        return (b.width * b.height) - (a.width * a.height) || Math.max(b.width, b.height) - Math.max(a.width, a.height);
+        return areaB - areaA || Math.max(bDims.effWidth, bDims.effHeight) - Math.max(aDims.effWidth, aDims.effHeight);
     }
   });
   return copy;
+}
+
+/**
+ * توسعة قائمة القطع حسب العدد والمضاعرات والتحكم الفردي (إخفاء/أبعاد/عروق/تدوير)
+ * مشتركة بين محرك MaxRects المستطيل ومحرك NFP غير المنتظم
+ */
+export function expandParts(
+  parts: PartInput[],
+  globalMultiplier = 1,
+  partOverrides?: Record<string, IndividualPartOverride>
+): (PartInput & { uniqueId: string })[] {
+  const mult = Math.max(1, Math.floor(globalMultiplier || 1));
+  const expandedParts: (PartInput & { uniqueId: string })[] = [];
+
+  for (const p of parts) {
+    const count = Math.max(1, (p.count || 1) * mult);
+    for (let c = 0; c < count; c++) {
+      const uniqueId = `${p.id}_${c + 1}`;
+      const override = partOverrides?.[uniqueId];
+      if (override?.hidden) continue; // استبعاد القطع المحذوفة فردياً
+
+      expandedParts.push({
+        ...p,
+        width: override?.customWidth !== undefined ? override.customWidth : p.width,
+        height: override?.customHeight !== undefined ? override.customHeight : p.height,
+        uniqueId,
+        grain: override?.grain || p.grain,
+        // التحكم الفردي للنسخة يسبق تدوير الصنف على مستوى PartInput
+        overrideRotated: override?.rotated ?? p.overrideRotated
+      });
+    }
+  }
+
+  return expandedParts;
 }
 
 /**
@@ -515,55 +657,47 @@ export function nestSheets(
   globalMultiplier = 1,
   partOverrides?: Record<string, IndividualPartOverride>
 ): NestingResult {
-  const mult = Math.max(1, Math.floor(globalMultiplier || 1));
-  const expandedParts: (PartInput & { uniqueId: string })[] = [];
-
-  for (const p of parts) {
-    const count = Math.max(1, (p.count || 1) * mult);
-    for (let c = 0; c < count; c++) {
-      const uniqueId = `${p.id}_${c + 1}`;
-      const override = partOverrides?.[uniqueId];
-      expandedParts.push({
-        ...p,
-        width: override?.customWidth !== undefined ? override.customWidth : p.width,
-        height: override?.customHeight !== undefined ? override.customHeight : p.height,
-        uniqueId,
-        grain: override?.grain || p.grain,
-        overrideRotated: override?.rotated
-      });
-    }
-  }
+  const expandedParts = expandParts(parts, globalMultiplier, partOverrides);
 
   let finalSheets: SheetBin[] = [];
   let finalUnplaced: PartInput[] = [];
 
   if (sortStrategy === 'optimal') {
     // استراتيجية الاستغلال الأقصى التلقائي:
-    // تجربة استراتيجيات الترتيب المتعددة واختيار النمط الذي يضمن أعلى استغلال لمساحة اللوح الأول
+    // تجربة استراتيجيات الترتيب المتعددة واختيار النمط الذي يضمن أعلى استغلال لمساحة اللوح الأول وأقل هدر
     const candidateStrategies: Array<Exclude<SortStrategy, 'optimal' | 'original'>> = [
       'maxDimension',
+      'area',
       'perimeter',
       'width',
       'height',
-      'area'
+      'minDimension',
+      'aspectRatio'
     ];
 
-    let bestScore = -1;
+    let bestScore = -Infinity;
     let bestResult: { sheets: SheetBin[]; unplacedParts: PartInput[] } | null = null;
 
     for (const strat of candidateStrategies) {
       const sorted = sortPartsBy(expandedParts, strat);
-      // تجربة كل استراتيجية مع وبدون الترتيب الصارم لمعرفة أيهما يعطي أعلى ملء للوح الأول
-      for (const strict of [false, true]) {
-        const res = packSequentialSheets(sorted, sheetConfig, strict);
+      for (const heuristic of ['BSSF', 'BAF'] as const) {
+        for (const strict of [false, true]) {
+          const res = packSequentialSheets(sorted, sheetConfig, strict, heuristic);
 
-        if (res.sheets.length > 0) {
-          const sheet1Stats = res.sheets[0].getStats();
-          // وزن المعيار: أولوية قصوى لمساحة اللوح الأول المستخدمة، ثم عدد القطع، ثم تقليل عدد الألواح الكلية
-          const score = sheet1Stats.usedArea * 1000 + sheet1Stats.placedCount * 50 - res.sheets.length * 10000;
-          if (score > bestScore || bestResult === null) {
-            bestScore = score;
-            bestResult = res;
+          if (res.sheets.length > 0) {
+            const sheet1Stats = res.sheets[0].getStats();
+            const totalUsedArea = res.sheets.reduce((sum, s) => sum + s.getStats().usedArea, 0);
+            // وزن المعيار: أولوية قصوى لتقليل عدد الألواح، ثم ملء اللوح الأول بأعلى مساحة وعدد قطع
+            const score =
+              sheet1Stats.usedArea * 1000 +
+              sheet1Stats.placedCount * 50 -
+              res.sheets.length * 100000 +
+              totalUsedArea;
+
+            if (score > bestScore || bestResult === null) {
+              bestScore = score;
+              bestResult = res;
+            }
           }
         }
       }
@@ -578,15 +712,43 @@ export function nestSheets(
       finalUnplaced = fallback.unplacedParts;
     }
   } else if (sortStrategy === 'original') {
-    const res = packSequentialSheets(expandedParts, sheetConfig, true);
+    const res = packSequentialSheets(expandedParts, sheetConfig, true, 'BSSF');
     finalSheets = res.sheets;
     finalUnplaced = res.unplacedParts;
   } else {
-    // استجابة فورية ومباشرة لاختيار المستخدم من القائمة المنسدلة
+    // استجابة فورية وحاسمة لاختيار المستخدم من القائمة المنسدلة:
+    // الترتيب المختار يُطبَّق صارماً على التسكين، وتُجرب عدة معايير ملاءمة (BSSF/BAF/BLSF)
+    // واختيار الأفضل منها بعدد الألواح ثم استغلال مساحة اللوح الأول
     const sorted = sortPartsBy(expandedParts, sortStrategy);
-    const res = packSequentialSheets(sorted, sheetConfig, true);
-    finalSheets = res.sheets;
-    finalUnplaced = res.unplacedParts;
+    let bestResult: { sheets: SheetBin[]; unplacedParts: PartInput[] } | null = null;
+    let bestScore = -Infinity;
+
+    for (const heuristic of ['BSSF', 'BAF', 'BLSF'] as const) {
+      const res = packSequentialSheets(sorted, sheetConfig, true, heuristic);
+      if (res.sheets.length > 0) {
+        const s1 = res.sheets[0].getStats();
+        const totalUsedArea = res.sheets.reduce((sum, s) => sum + s.getStats().usedArea, 0);
+        // وزن المعيار: تقليل عدد الألواح أولاً، ثم ملء اللوح الأول بأعلى مساحة وعدد قطع
+        const score =
+          s1.usedArea * 1000 +
+          s1.placedCount * 10 -
+          res.sheets.length * 1000000 +
+          totalUsedArea;
+        if (score > bestScore || bestResult === null) {
+          bestScore = score;
+          bestResult = res;
+        }
+      }
+    }
+
+    if (bestResult) {
+      finalSheets = bestResult.sheets;
+      finalUnplaced = bestResult.unplacedParts;
+    } else {
+      const fallback = packSequentialSheets(sorted, sheetConfig, true);
+      finalSheets = fallback.sheets;
+      finalUnplaced = fallback.unplacedParts;
+    }
   }
 
   const sheetsStats = finalSheets.map(s => s.getStats());

@@ -4,7 +4,7 @@
  * مع دعم استيراد التصميم ككتلة متكاملة أو تفكيكه وإظهار الـ Outline الأحمر #FF0000
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Upload,
@@ -50,8 +50,6 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
   const [overrideHeight, setOverrideHeight] = useState<number | ''>('');
   const [partCopies, setPartCopies] = useState<number>(1);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   const processSvgContent = (content: string, fileName?: string, mode: SvgImportMode = importMode) => {
     try {
       setErrorMsg(null);
@@ -78,10 +76,11 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleFile = (file: File) => {
+    if (!/\.svg$/i.test(file.name) && file.type !== 'image/svg+xml') {
+      setErrorMsg(isAr ? 'صيغة الملف غير مدعومة — الرجاء اختيار ملف SVG.' : 'Unsupported file format — please select an SVG file.');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
@@ -91,6 +90,32 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
       setErrorMsg(isAr ? 'تعذر قراءة الملف المحدد.' : 'Failed to read selected file.');
     };
     reader.readAsText(file);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    handleFile(file);
+  };
+
+  const [dragActive, setDragActive] = useState(false);
+  const handleDragOver = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragActive) setDragActive(true);
+  };
+  const handleDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+  };
+  const handleDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    handleFile(file);
   };
 
   const handleModeChange = (mode: SvgImportMode) => {
@@ -200,16 +225,24 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
 
           {/* تبويب 1: رفع ملف من الجهاز */}
           {activeTab === 'upload' && (
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-slate-300 hover:border-red-500 rounded-2xl p-8 text-center cursor-pointer transition-colors bg-slate-50/50 hover:bg-red-50/20 group"
+            <label
+              htmlFor="svgFilePicker"
+              onDragEnter={handleDragOver}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`border-2 rounded-2xl p-8 text-center cursor-pointer transition-colors group flex flex-col items-center ${
+                dragActive
+                  ? 'border-red-600 bg-red-50/30'
+                  : 'border-dashed border-slate-300 hover:border-red-500 bg-slate-50/50 hover:bg-red-50/20'
+              }`}
             >
               <input
-                ref={fileInputRef}
+                id="svgFilePicker"
                 type="file"
                 accept=".svg,image/svg+xml"
                 onChange={handleFileUpload}
-                className="hidden"
+                className="sr-only"
               />
               <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-red-100 group-hover:bg-red-200 text-red-600 flex items-center justify-center transition-colors">
                 <FolderOpen className="w-6 h-6" />
@@ -220,7 +253,7 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
               <p className="text-xs text-slate-500">
                 {isAr ? 'يدعم ملفات أوتوكاد وإليستريتور وبرامج CNC المختلفة' : 'Supports Illustrator, AutoCAD, Inkscape & CNC vector exports'}
               </p>
-            </div>
+            </label>
           )}
 
           {/* تبويب 2: تصاميم CNC جاهزة */}
@@ -257,10 +290,11 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
           {/* تبويب 3: لصق كود SVG */}
           {activeTab === 'paste' && (
             <div className="space-y-3">
-              <label className="block text-xs font-bold text-slate-700">
+              <label htmlFor="svgPaste" className="block text-xs font-bold text-slate-700">
                 {isAr ? 'الصق نص كود الـ SVG هنا:' : 'Paste raw SVG XML markup:'}
               </label>
               <textarea
+                id="svgPaste"
                 value={svgContent}
                 onChange={(e) => setSvgContent(e.target.value)}
                 placeholder="<svg ...> ... </svg>"
@@ -278,9 +312,9 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
 
           {/* خيارات وضع الاستيراد (Import Mode) وقفل العروق */}
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-            <label className="block text-xs font-bold text-slate-800">
+            <span className="block text-xs font-bold text-slate-800">
               {isAr ? 'طريقة معالجة ملف الـ SVG:' : 'Import Mode:'}
-            </label>
+            </span>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <button
                 type="button"
@@ -395,37 +429,46 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
               {parsedResult.parts.length === 1 && (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    <label htmlFor="svgOverrideWidth" className="block text-[11px] font-bold text-slate-700 mb-1">
                       {isAr ? 'العرض (X) بالمليمتر:' : 'Width (X) mm:'}
                     </label>
                     <input
+                      id="svgOverrideWidth"
                       type="number"
                       value={overrideWidth}
                       onChange={(e) => setOverrideWidth(Number(e.target.value) || '')}
                       className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold font-mono-numbers text-slate-800"
+                      aria-label={isAr ? 'عرض التصميم بالمليمتر' : 'Design width in mm'}
+                      name="svgOverrideWidth"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    <label htmlFor="svgOverrideHeight" className="block text-[11px] font-bold text-slate-700 mb-1">
                       {isAr ? 'الارتفاع (Y) بالمليمتر:' : 'Height (Y) mm:'}
                     </label>
                     <input
+                      id="svgOverrideHeight"
                       type="number"
                       value={overrideHeight}
                       onChange={(e) => setOverrideHeight(Number(e.target.value) || '')}
                       className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold font-mono-numbers text-slate-800"
+                      aria-label={isAr ? 'ارتفاع التصميم بالمليمتر' : 'Design height in mm'}
+                      name="svgOverrideHeight"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    <label htmlFor="svgPartCopies" className="block text-[11px] font-bold text-slate-700 mb-1">
                       {isAr ? 'كمية التكرار (نسخ):' : 'Copies:'}
                     </label>
                     <input
+                      id="svgPartCopies"
                       type="number"
                       min="1"
                       value={partCopies}
                       onChange={(e) => setPartCopies(Math.max(1, Number(e.target.value) || 1))}
                       className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold font-mono-numbers text-red-600"
+                      aria-label={isAr ? 'كمية التكرار بالنسخ' : 'Number of copies'}
+                      name="svgPartCopies"
                     />
                   </div>
                 </div>

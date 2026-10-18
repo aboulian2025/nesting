@@ -72,12 +72,14 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                 <div className="relative">
                   <input
                     type="number"
-                    min="100"
+                    min="50"
                     max="10000"
                     step="10"
                     value={config.sheetWidth}
-                    onChange={(e) => onUpdateConfig({ ...config, sheetWidth: Number(e.target.value) || 0 })}
+                    onChange={(e) => onUpdateConfig({ ...config, sheetWidth: Math.max(50, Number(e.target.value) || 0) })}
                     className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-bold font-mono-numbers text-slate-900 focus:outline-hidden focus:border-red-500"
+                    aria-label={isAr ? 'عرض اللوح بالمليمتر' : 'Sheet width in mm'}
+                    name="settingsSheetWidth"
                   />
                   <span className="absolute left-3 top-2.5 text-xs text-slate-400">mm</span>
                 </div>
@@ -90,12 +92,14 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                 <div className="relative">
                   <input
                     type="number"
-                    min="100"
+                    min="50"
                     max="10000"
                     step="10"
                     value={config.sheetHeight}
-                    onChange={(e) => onUpdateConfig({ ...config, sheetHeight: Number(e.target.value) || 0 })}
+                    onChange={(e) => onUpdateConfig({ ...config, sheetHeight: Math.max(50, Number(e.target.value) || 0) })}
                     className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-bold font-mono-numbers text-slate-900 focus:outline-hidden focus:border-red-500"
+                    aria-label={isAr ? 'ارتفاع اللوح بالمليمتر' : 'Sheet height in mm'}
+                    name="settingsSheetHeight"
                   />
                   <span className="absolute left-3 top-2.5 text-xs text-slate-400">mm</span>
                 </div>
@@ -113,11 +117,13 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                 <input
                   type="number"
                   min="0"
-                  max="100"
+                  max="150"
                   step="1"
                   value={config.sheetMargin}
-                  onChange={(e) => onUpdateConfig({ ...config, sheetMargin: Number(e.target.value) || 0 })}
+                  onChange={(e) => onUpdateConfig({ ...config, sheetMargin: Math.min(150, Math.max(0, Number(e.target.value) || 0)) })}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm font-bold font-mono-numbers text-slate-900 focus:outline-hidden focus:border-red-500"
+                  aria-label={isAr ? 'هامش اللوح بالمليمتر' : 'Sheet margin in mm'}
+                  name="settingsSheetMargin"
                 />
                 <span className="absolute left-3 top-2.5 text-xs text-slate-400">mm</span>
               </div>
@@ -134,12 +140,38 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                   max="25"
                   step="0.5"
                   value={config.partGap}
-                  onChange={(e) => onUpdateConfig({ ...config, partGap: Number(e.target.value) || 0 })}
+                  onChange={(e) => onUpdateConfig({ ...config, partGap: Math.min(25, Math.max(0, Number(e.target.value) || 0)) })}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm font-bold font-mono-numbers text-slate-900 focus:outline-hidden focus:border-red-500"
+                  aria-label={isAr ? 'سماكة سلاح المنشار بالمليمتر' : 'Saw kerf gap in mm'}
+                  name="settingsPartGap"
                 />
                 <span className="absolute left-3 top-2.5 text-xs text-slate-400">mm</span>
               </div>
             </div>
+          </div>
+
+          {/* أولوية ترتيب القطع */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              {isAr ? 'أولوية ترتيب القطع للتسكين' : 'Piece Sorting Priority'}
+            </label>
+            <select
+              value={sortStrategy}
+              onChange={(e) => onChangeSortStrategy(e.target.value as SortStrategy)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-slate-900 focus:outline-hidden focus:border-red-500 cursor-pointer"
+              aria-label={isAr ? 'أولوية ترتيب القطع للتسكين' : 'Piece sorting priority'}
+              name="settingsSortStrategy"
+            >
+              <option value="optimal">{isAr ? '✨ استغلال أقصى للوح الأول (تلقائي)' : '✨ Maximize Sheet 1 (Optimal)'}</option>
+              <option value="maxDimension">{isAr ? 'الضلع الأطول أولاً' : 'Longest Side'}</option>
+              <option value="area">{isAr ? 'المساحة الأكبر أولاً' : 'Largest Area'}</option>
+              <option value="perimeter">{isAr ? 'المحيط الأكبر أولاً' : 'Largest Perimeter'}</option>
+              <option value="width">{isAr ? 'العرض الأكبر أولاً (X)' : 'Max Width (X)'}</option>
+              <option value="height">{isAr ? 'الارتفاع/الطول الأكبر أولاً (Y)' : 'Max Height (Y)'}</option>
+              <option value="minDimension">{isAr ? 'الضلع الأصغر أولاً' : 'Shortest Side'}</option>
+              <option value="aspectRatio">{isAr ? 'القطع النحيفة الطولية أولاً' : 'Slender / Aspect Ratio'}</option>
+              <option value="original">{isAr ? 'حسب الترتيب الأصلي في الملف' : 'Original Order'}</option>
+            </select>
           </div>
 
           {/* التكلفة والسماكة */}
@@ -156,6 +188,8 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                 value={config.pricePerSheet || 0}
                 onChange={(e) => onUpdateConfig({ ...config, pricePerSheet: Number(e.target.value) || 0 })}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm font-bold font-mono-numbers text-slate-900 focus:outline-hidden focus:border-red-500"
+                aria-label={isAr ? 'سعر اللوح الواحد' : 'Price per sheet'}
+                name="settingsPricePerSheet"
               />
             </div>
 
@@ -172,6 +206,8 @@ export const SheetSettingsModal: React.FC<SheetSettingsModalProps> = ({
                 value={config.thickness || 18}
                 onChange={(e) => onUpdateConfig({ ...config, thickness: Number(e.target.value) || 0 })}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm font-bold font-mono-numbers text-slate-900 focus:outline-hidden focus:border-red-500"
+                aria-label={isAr ? 'سماكة اللوح بالمليمتر' : 'Sheet thickness in mm'}
+                name="settingsThickness"
               />
             </div>
           </div>

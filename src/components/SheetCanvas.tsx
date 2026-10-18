@@ -14,9 +14,18 @@ import {
   Scissors,
   CheckCircle2,
   RotateCw,
-  Info
+  Info,
+  User,
+  Users,
+  Settings,
+  ArrowRightLeft,
+  ArrowUpDown,
+  Copy,
+  X,
+  Undo2,
+  Redo2
 } from 'lucide-react';
-import { SheetStats, PlacedPart } from '../utils/nesting';
+import { SheetStats, PlacedPart, GrainDirection, GrainDirectionType } from '../utils/nesting';
 import { cleanSnippetForInkscape } from '../utils/exporters';
 
 interface SheetCanvasProps {
@@ -25,6 +34,20 @@ interface SheetCanvasProps {
   onChangeActiveSheet: (index: number) => void;
   selectedPartId: string | null;
   onSelectPart: (id: string | null) => void;
+  selectedPlacedPart?: PlacedPart | null;
+  onSelectPlacedPart?: (part: PlacedPart | null, mode?: 'individual' | 'group') => void;
+  onOpenPieceModal?: (part: PlacedPart, mode: 'individual' | 'group') => void;
+  controlMode?: 'individual' | 'group';
+  onChangeControlMode?: (mode: 'individual' | 'group') => void;
+  onRotateIndividual?: (uniqueId: string) => void;
+  onRotateGroup?: (partId: string) => void;
+  onChangeGrainIndividual?: (uniqueId: string, grain: GrainDirectionType) => void;
+  onChangeGrainGroup?: (partId: string, grain: GrainDirectionType) => void;
+  onDuplicateInstance?: (uniqueId: string) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   language: 'ar' | 'en';
 }
 
@@ -34,6 +57,20 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
   onChangeActiveSheet,
   selectedPartId,
   onSelectPart,
+  selectedPlacedPart,
+  onSelectPlacedPart,
+  onOpenPieceModal,
+  controlMode = 'individual',
+  onChangeControlMode,
+  onRotateIndividual,
+  onRotateGroup,
+  onChangeGrainIndividual,
+  onChangeGrainGroup,
+  onDuplicateInstance,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
   language
 }) => {
   const isAr = language === 'ar';
@@ -98,6 +135,36 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
 
         {/* أدوات الزووم وإظهار فواصل المنشار */}
         <div className="flex items-center gap-1.5 self-end sm:self-auto">
+          {/* أزرار التراجع والإعادة Undo / Redo */}
+          <div className="flex items-center border border-slate-200 rounded-lg overflow-hidden bg-white">
+            <button
+              type="button"
+              onClick={onUndo}
+              disabled={!canUndo}
+              className={`p-1.5 transition-colors ${
+                canUndo
+                  ? 'text-slate-600 hover:bg-slate-100 cursor-pointer'
+                  : 'text-slate-300 cursor-not-allowed'
+              }`}
+              title={isAr ? 'تراجع (Ctrl+Z)' : 'Undo (Ctrl+Z)'}
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={onRedo}
+              disabled={!canRedo}
+              className={`p-1.5 transition-colors border-s border-slate-200 ${
+                canRedo
+                  ? 'text-slate-600 hover:bg-slate-100 cursor-pointer'
+                  : 'text-slate-300 cursor-not-allowed'
+              }`}
+              title={isAr ? 'إعادة (Ctrl+Shift+Z)' : 'Redo (Ctrl+Shift+Z)'}
+            >
+              <Redo2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
           {/* تبديل خطوط مسار المنشار */}
           <button
             onClick={() => setShowCutLines(!showCutLines)}
@@ -149,6 +216,165 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
         ref={containerRef}
         className="flex-1 bg-slate-100/70 relative overflow-auto p-4 sm:p-6 flex items-center justify-center min-h-[440px]"
       >
+        {/* شريط الإجراءات والتحكم السريع العائم عند اختيار قطعة */}
+        {selectedPlacedPart && (
+          <div className="absolute top-3 inset-x-3 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 z-30 bg-white/95 backdrop-blur-md shadow-xl border border-slate-300 rounded-2xl p-2 sm:px-4 sm:py-2.5 flex flex-wrap items-center justify-between sm:justify-start gap-2 max-w-2xl animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2">
+              <span
+                className="w-3.5 h-3.5 rounded-full shrink-0 shadow-xs"
+                style={{ backgroundColor: selectedPlacedPart.color || '#ef4444' }}
+              />
+              <span className="text-xs font-bold text-slate-900 max-w-[130px] sm:max-w-[180px] truncate">
+                {selectedPlacedPart.name}
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono-numbers">
+                #{selectedPlacedPart.uniqueId.replace(/.*_/, '')}
+              </span>
+            </div>
+
+            {/* أزرار اختيار نطاق التحكم: فردي أو جماعي */}
+            <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs">
+              <button
+                type="button"
+                onClick={() => onChangeControlMode?.('individual')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                  controlMode === 'individual'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title={isAr ? 'التحكم في هذه النسخة الفردية فقط' : 'Individual piece control'}
+              >
+                <User className="w-3.5 h-3.5" />
+                <span>{isAr ? 'تحكم فردي' : 'Individual'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeControlMode?.('group')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                  controlMode === 'group'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title={isAr ? 'التحكم في كافة القطع المتكررة من هذا الصنف' : 'Batch repeated parts control'}
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>{isAr ? 'تحكم جماعي' : 'Group'}</span>
+              </button>
+            </div>
+
+            {/* أزرار الإجراء السريع: تدوير، قفل العروق، وتعديل تفصيلي */}
+            <div className="flex items-center gap-1">
+              {/* تدوير 90° */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (controlMode === 'individual') {
+                    onRotateIndividual?.(selectedPlacedPart.uniqueId);
+                  } else {
+                    onRotateGroup?.(selectedPlacedPart.id);
+                  }
+                }}
+                className="px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                title={isAr ? (controlMode === 'individual' ? 'تدوير هذه النسخة 90°' : 'تدوير كافة القطع المتكررة 90°') : 'Rotate 90°'}
+              >
+                <RotateCw className="w-3.5 h-3.5 text-blue-600" />
+                <span className="hidden sm:inline">{isAr ? 'تدوير 90°' : 'Rotate'}</span>
+              </button>
+
+              {/* تكرار هذه النسخة فقط كقطعة مستقلة */}
+              <button
+                type="button"
+                onClick={() => onDuplicateInstance?.(selectedPlacedPart.uniqueId)}
+                className="px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                title={isAr ? 'تكرار هذه النسخة فقط كقطعة مستقلة دون التأثير على باقي النسخ' : 'Duplicate this instance as an independent piece'}
+              >
+                <Copy className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="hidden sm:inline">{isAr ? 'تكرار' : 'Duplicate'}</span>
+              </button>
+
+              {/* قفل العروق السريع */}
+              <div className="hidden md:flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (controlMode === 'individual') {
+                      onChangeGrainIndividual?.(selectedPlacedPart.uniqueId, GrainDirection.WIDTH);
+                    } else {
+                      onChangeGrainGroup?.(selectedPlacedPart.id, GrainDirection.WIDTH);
+                    }
+                  }}
+                  className={`px-1.5 py-0.5 rounded font-bold cursor-pointer ${
+                    selectedPlacedPart.grain === GrainDirection.WIDTH ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title={isAr ? 'أفقي = عرض' : 'Width'}
+                >
+                  <ArrowRightLeft className="w-2.5 h-2.5 inline mx-0.5" />
+                  <span>{isAr ? 'عرض' : 'W'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (controlMode === 'individual') {
+                      onChangeGrainIndividual?.(selectedPlacedPart.uniqueId, GrainDirection.HEIGHT);
+                    } else {
+                      onChangeGrainGroup?.(selectedPlacedPart.id, GrainDirection.HEIGHT);
+                    }
+                  }}
+                  className={`px-1.5 py-0.5 rounded font-bold cursor-pointer ${
+                    selectedPlacedPart.grain === GrainDirection.HEIGHT ? 'bg-rose-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title={isAr ? 'رأسي = طول' : 'Height'}
+                >
+                  <ArrowUpDown className="w-2.5 h-2.5 inline mx-0.5" />
+                  <span>{isAr ? 'طول' : 'H'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (controlMode === 'individual') {
+                      onChangeGrainIndividual?.(selectedPlacedPart.uniqueId, GrainDirection.FREE);
+                    } else {
+                      onChangeGrainGroup?.(selectedPlacedPart.id, GrainDirection.FREE);
+                    }
+                  }}
+                  className={`px-1.5 py-0.5 rounded font-bold cursor-pointer ${
+                    selectedPlacedPart.grain === GrainDirection.FREE ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title={isAr ? 'حر = تدوير حر للقطعة حسب المساحة' : 'Free'}
+                >
+                  <RotateCw className="w-2.5 h-2.5 inline mx-0.5" />
+                  <span>{isAr ? 'حر' : 'F'}</span>
+                </button>
+              </div>
+
+              {/* زر التعديل المفصل (فتح النافذة) */}
+              <button
+                type="button"
+                onClick={() => onOpenPieceModal?.(selectedPlacedPart, controlMode)}
+                className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                title={isAr ? 'تعديل تفصيلي للقياسات والخصائص' : 'Edit details'}
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{isAr ? 'تعديل' : 'Edit'}</span>
+              </button>
+
+              {/* زر إلغاء التحديد */}
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectPlacedPart?.(null);
+                  onSelectPart(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                title={isAr ? 'إلغاء التحديد' : 'Deselect'}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         <div
           className="transition-transform duration-200 ease-out origin-center select-none w-full flex items-center justify-center"
           style={{ transform: `scale(${zoom})` }}
@@ -244,9 +470,107 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
               {/* 3. طبقة القطع المسكنة مع حماية الاقتصاص لمنع أي مسارات خارج صفحة العمل */}
               <g clipPath="url(#sheetWorkAreaClip)">
                 {activeSheet.placedParts.map((part) => {
-                  const isSelected = selectedPartId === part.id;
+                  const isThisInstanceSelected = selectedPlacedPart?.uniqueId === part.uniqueId;
+                  const isSamePartGroup = selectedPartId === part.id;
                   const isHovered = hoveredPart?.uniqueId === part.uniqueId;
                   const isRotated = part.rotated;
+
+                  // أجزاء NFP: contour جاهز بإحداثيات اللوح (يشمل أي زاوية دوران)
+                  if (part.contour && part.contour.length >= 3) {
+                    const pts = part.contour
+                      .map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`)
+                      .join(' ');
+                    return (
+                      <g
+                        key={part.uniqueId}
+                        onClick={() => {
+                          if (onSelectPlacedPart) {
+                            if (selectedPlacedPart?.uniqueId === part.uniqueId) {
+                              onSelectPlacedPart(null);
+                              onSelectPart(null);
+                            } else {
+                              onSelectPlacedPart(part, 'individual');
+                              onSelectPart(part.id);
+                            }
+                          } else {
+                            onSelectPart(isSamePartGroup ? null : part.id);
+                          }
+                        }}
+                        onDoubleClick={() => {
+                          onOpenPieceModal?.(part, controlMode || 'individual');
+                        }}
+                        onMouseEnter={() => setHoveredPart(part)}
+                        onMouseLeave={() => setHoveredPart(null)}
+                        className="cursor-pointer transition-opacity duration-150"
+                        opacity={selectedPartId && !isSamePartGroup ? 0.35 : 1}
+                      >
+                        {/* المسارات الحقيقية المستوردة (تشمل الثقوب/المسارات الداخلية) */}
+                        {part.svgSnippet && part.worldTx !== undefined && part.worldTy !== undefined && (
+                          <g
+                            transform={
+                              `translate(${part.worldTx}, ${part.worldTy}) ` +
+                              `rotate(${part.rotationDeg || 0}) ` +
+                              `scale(${(part.originalBBox?.width ? part.originalWidth / part.originalBBox.width : 1).toFixed(4)}, ${(part.originalBBox?.height ? part.originalHeight / part.originalBBox.height : 1).toFixed(4)}) ` +
+                              `translate(${-(part.originalBBox?.x || 0)}, ${-(part.originalBBox?.y || 0)})`
+                            }
+                            pointerEvents="none"
+                            dangerouslySetInnerHTML={{ __html: cleanSnippetForInkscape(part.svgSnippet) }}
+                          />
+                        )}
+                        {/* منطقة نقر تغطي شكل القطعة الفعلي */}
+                        <polygon points={pts} fill="transparent" pointerEvents="all" />
+                        {/* مؤشر فاصل الشفرة (تقريبي) */}
+                        {showCutLines && activeSheet.partGap > 0 && (
+                          <polygon
+                            points={pts}
+                            fill="none"
+                            stroke="#f87171"
+                            strokeWidth={Math.max(activeSheet.partGap, 1)}
+                            strokeDasharray="4 2"
+                            opacity="0.3"
+                            pointerEvents="none"
+                          />
+                        )}
+                        {/* الحد الخارجي الحقيقي للقص */}
+                        <polygon
+                          points={pts}
+                          fill="none"
+                          stroke="#FF0000"
+                          strokeWidth="3.5"
+                          pointerEvents="none"
+                        />
+                        {/* إطارات التحديد/التحويم */}
+                        {isThisInstanceSelected ? (
+                          <polygon
+                            points={pts}
+                            fill="none"
+                            stroke="#2563eb"
+                            strokeWidth="4.5"
+                            strokeDasharray="10 5"
+                            pointerEvents="none"
+                          />
+                        ) : isSamePartGroup ? (
+                          <polygon
+                            points={pts}
+                            fill="none"
+                            stroke="#9333ea"
+                            strokeWidth="3.5"
+                            strokeDasharray="6 4"
+                            pointerEvents="none"
+                          />
+                        ) : isHovered ? (
+                          <polygon
+                            points={pts}
+                            fill="none"
+                            stroke="#60a5fa"
+                            strokeWidth="3"
+                            strokeDasharray="4 4"
+                            pointerEvents="none"
+                          />
+                        ) : null}
+                      </g>
+                    );
+                  }
 
                   const scaleX = part.originalBBox?.width ? part.originalWidth / part.originalBBox.width : 1;
                   const scaleY = part.originalBBox?.height ? part.originalHeight / part.originalBBox.height : 1;
@@ -262,12 +586,39 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
                     <g
                       key={part.uniqueId}
                       transform={partTransform}
-                      onClick={() => onSelectPart(isSelected ? null : part.id)}
+                      onClick={() => {
+                        if (onSelectPlacedPart) {
+                          if (selectedPlacedPart?.uniqueId === part.uniqueId) {
+                            onSelectPlacedPart(null);
+                            onSelectPart(null);
+                          } else {
+                            // النقر على أي قطعة يفعّل التحكم الفردي بهذه النسخة تحديداً
+                            // ويمكن التبديل إلى التحكم الجماعي من الشريط العائم (لكل النسخ المتكررة)
+                            onSelectPlacedPart(part, 'individual');
+                            onSelectPart(part.id);
+                          }
+                        } else {
+                          onSelectPart(isSamePartGroup ? null : part.id);
+                        }
+                      }}
+                      onDoubleClick={() => {
+                        onOpenPieceModal?.(part, controlMode || 'individual');
+                      }}
                       onMouseEnter={() => setHoveredPart(part)}
                       onMouseLeave={() => setHoveredPart(null)}
                       className="cursor-pointer transition-opacity duration-150"
-                      opacity={selectedPartId && !isSelected ? 0.35 : 1}
+                      opacity={selectedPartId && !isSamePartGroup ? 0.35 : 1}
                     >
+                      {/* منطقة نقر شفافة تغطي كامل مساحة القطعة (بما فيها النحيفة) لتسهيل التحديد بالنقر */}
+                      <rect
+                        x="0"
+                        y="0"
+                        width={part.originalWidth}
+                        height={part.originalHeight}
+                        fill="transparent"
+                        pointerEvents="all"
+                      />
+
                       {/* خط فاصل سماكة سلاح المنشار Kerf */}
                       {showCutLines && activeSheet.partGap > 0 && (
                         <rect
@@ -293,7 +644,7 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
                           />
 
                           {/* إطار التحديد عند النقر أو التحويم */}
-                          {(isSelected || isHovered) && (
+                          {isThisInstanceSelected ? (
                             <rect
                               x="-2"
                               y="-2"
@@ -305,7 +656,31 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
                               strokeDasharray="10 5"
                               rx="2"
                             />
-                          )}
+                          ) : isSamePartGroup ? (
+                            <rect
+                              x="-2"
+                              y="-2"
+                              width={part.originalWidth + 4}
+                              height={part.originalHeight + 4}
+                              fill="none"
+                              stroke="#9333ea"
+                              strokeWidth="2.5"
+                              strokeDasharray="6 4"
+                              rx="2"
+                            />
+                          ) : isHovered ? (
+                            <rect
+                              x="-2"
+                              y="-2"
+                              width={part.originalWidth + 4}
+                              height={part.originalHeight + 4}
+                              fill="none"
+                              stroke="#60a5fa"
+                              strokeWidth="2"
+                              strokeDasharray="4 4"
+                              rx="2"
+                            />
+                          ) : null}
                         </g>
                       ) : (
                         /* للقطع المستطيلة العادية المنشأة يدوياً كـ Outline أحمر بارز #FF0000 */
@@ -317,11 +692,12 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
                             height={part.originalHeight}
                             fill="none"
                             stroke="#FF0000"
-                            strokeWidth="2.5"
+                            strokeWidth="3.5"
+                            pointerEvents="none"
                           />
 
                           {/* إطار التحديد عند النقر أو التحويم */}
-                          {(isSelected || isHovered) && (
+                          {isThisInstanceSelected ? (
                             <rect
                               x="-2"
                               y="-2"
@@ -333,7 +709,31 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
                               strokeDasharray="10 5"
                               rx="2"
                             />
-                          )}
+                          ) : isSamePartGroup ? (
+                            <rect
+                              x="-2"
+                              y="-2"
+                              width={part.originalWidth + 4}
+                              height={part.originalHeight + 4}
+                              fill="none"
+                              stroke="#9333ea"
+                              strokeWidth="2.5"
+                              strokeDasharray="6 4"
+                              rx="2"
+                            />
+                          ) : isHovered ? (
+                            <rect
+                              x="-2"
+                              y="-2"
+                              width={part.originalWidth + 4}
+                              height={part.originalHeight + 4}
+                              fill="none"
+                              stroke="#60a5fa"
+                              strokeWidth="2"
+                              strokeDasharray="4 4"
+                              rx="2"
+                            />
+                          ) : null}
                         </g>
                       )}
                     </g>
@@ -349,12 +749,17 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
           <div className="absolute top-4 left-4 z-20 bg-slate-900/90 backdrop-blur-xs text-white p-3 rounded-xl shadow-2xl border border-slate-700 pointer-events-none text-xs flex flex-col gap-1 max-w-xs animate-in fade-in">
             <div className="flex items-center justify-between gap-2 border-b border-slate-700 pb-1.5">
               <span className="font-bold text-red-400">{hoveredPart.name}</span>
-              {hoveredPart.rotated && (
+              {hoveredPart.rotationDeg !== undefined && hoveredPart.rotationDeg !== 0 ? (
+                <span className="text-[10px] bg-red-950 text-red-300 border border-red-800 px-1.5 py-0.5 rounded flex items-center gap-1">
+                  <RotateCw className="w-3 h-3" />
+                  <span>{isAr ? `دوران ${hoveredPart.rotationDeg}°` : `Rotated ${hoveredPart.rotationDeg}°`}</span>
+                </span>
+              ) : hoveredPart.rotated ? (
                 <span className="text-[10px] bg-red-950 text-red-300 border border-red-800 px-1.5 py-0.5 rounded flex items-center gap-1">
                   <RotateCw className="w-3 h-3" />
                   <span>{isAr ? 'مدورة 90°' : 'Rotated 90°'}</span>
                 </span>
-              )}
+              ) : null}
             </div>
             <div className="flex justify-between items-center text-[11px] text-slate-300 font-mono-numbers">
               <span>{isAr ? 'الأبعاد الحقيقية:' : 'Dimensions:'}</span>

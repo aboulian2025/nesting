@@ -189,6 +189,19 @@ export function transformToCad(
   const scaleX = part.originalBBox?.width ? part.originalWidth / part.originalBBox.width : 1;
   const scaleY = part.originalBBox?.height ? part.originalHeight / part.originalBBox.height : 1;
 
+  // أجزاء NFP: تحويل عام (إزاحة + تدوير بأي زاوية + مقياس) لإعادة بناء المسارات الحقيقية
+  // (تشمل الثقوب/المسارات الداخلية) بدقة داخل اللوح
+  if (part.worldTx !== undefined && part.worldTy !== undefined) {
+    const lx = (localX - minX) * scaleX;
+    const ly = (localY - minY) * scaleY;
+    const rot = ((part.rotationDeg || 0) * Math.PI) / 180;
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
+    const worldX = part.worldTx + lx * cos - ly * sin;
+    const worldY = part.worldTy + lx * sin + ly * cos;
+    return { x: sheetOffsetX + worldX, y: sheetOffsetY + (sheetH - worldY) };
+  }
+
   // 1. تسوية الإزاحة الداخلية والمقياس
   const sX = (localX - minX) * scaleX;
   const sY = (localY - minY) * scaleY;
@@ -825,7 +838,30 @@ function appendSheetEntities(sheet: SheetStats, writer: DxfWriter, sheetOffsetX 
 
   // مسارات القص فقط (CUT_PATHS) مطابقة تماماً لمسارات SVG دون أي إطار لوح أو هوامش أو إضافات
   sheet.placedParts.forEach((part) => {
-    if (part.svgSnippet) {
+    if (
+      part.contour && part.contour.length >= 3 &&
+      part.svgSnippet &&
+      part.worldTx !== undefined && part.worldTy !== undefined
+    ) {
+      // أجزاء NFP المستوردة: نصدّر المسارات الحقيقية (تشمل الثقوب/المسارات الداخلية)
+      // عبر التحويل العام بدل رسم المضلع الخارجي فقط
+      parseSnippetToDxf(part.svgSnippet, part, sheetH, writer, sheetOffsetX, sheetOffsetY);
+    } else if (part.contour && part.contour.length >= 3) {
+      // أجزاء NFP: contour جاهز بإحداثيات اللوح (يشمل أي زاوية دوران) — نحوله مباشرة
+      const pts = part.contour;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        writer.addLine(
+          sheetOffsetX + a.x,
+          sheetOffsetY + (sheetH - a.y),
+          sheetOffsetX + b.x,
+          sheetOffsetY + (sheetH - b.y),
+          'CUT_PATHS',
+          1,
+        );
+      }
+    } else if (part.svgSnippet) {
       // تفكيك وتحويل مسارات الـ SVG الحقيقية إلى خطوط وأقواس متوافقة مع الـ CNC
       parseSnippetToDxf(part.svgSnippet, part, sheetH, writer, sheetOffsetX, sheetOffsetY);
     } else {

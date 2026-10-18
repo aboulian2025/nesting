@@ -73,6 +73,9 @@ export const Header: React.FC<HeaderProps> = ({
                 <span>{isAr ? 'توفير الخامة وتقليل الهدر' : 'Material Optimization'}</span>
                 <span>•</span>
                 <span>{isAr ? 'دعم ملفات SVG' : 'SVG Import'}</span>
+                <span className="text-[10px] text-slate-400" title="NFP geometry core derived from SVGnest (MIT License) — Jack Qiao">
+                  · NFP: SVGnest (MIT)
+                </span>
               </p>
             </div>
           </div>

@@ -32,10 +32,12 @@ interface PieceActionModalProps {
   onRotateGroup: (partId: string) => void;
   onChangeGrainIndividual: (uniqueId: string, grain: GrainDirectionType) => void;
   onChangeGrainGroup: (partId: string, grain: GrainDirectionType) => void;
+  onUpdateDimensionsIndividual?: (uniqueId: string, width: number, height: number) => void;
   onUpdateDimensionsGroup: (partId: string, width: number, height: number) => void;
   onUpdateCountGroup: (partId: string, count: number) => void;
   onDeleteIndividual: (uniqueId: string, partId: string) => void;
   onDeleteGroup: (partId: string) => void;
+  onDuplicateInstance?: (uniqueId: string) => void;
   language: 'ar' | 'en';
 }
 
@@ -50,10 +52,12 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
   onRotateGroup,
   onChangeGrainIndividual,
   onChangeGrainGroup,
+  onUpdateDimensionsIndividual,
   onUpdateDimensionsGroup,
   onUpdateCountGroup,
   onDeleteIndividual,
   onDeleteGroup,
+  onDuplicateInstance,
   language
 }) => {
   if (!isOpen || !placedPart) return null;
@@ -67,22 +71,26 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
   const totalCount = originalPart?.count || 1;
 
   // أبعاد التعديل المؤقتة
-  const [editWidth, setEditWidth] = useState(originalPart?.width || placedPart.originalWidth);
-  const [editHeight, setEditHeight] = useState(originalPart?.height || placedPart.originalHeight);
+  const [editWidth, setEditWidth] = useState(placedPart.originalWidth);
+  const [editHeight, setEditHeight] = useState(placedPart.originalHeight);
 
   useEffect(() => {
-    if (originalPart) {
+    if (controlMode === 'group' && originalPart) {
       setEditWidth(originalPart.width);
       setEditHeight(originalPart.height);
     } else {
       setEditWidth(placedPart.originalWidth);
       setEditHeight(placedPart.originalHeight);
     }
-  }, [originalPart, placedPart]);
+  }, [controlMode, originalPart, placedPart]);
 
   const handleApplyDimensions = () => {
-    if (originalPart && editWidth > 0 && editHeight > 0) {
-      onUpdateDimensionsGroup(originalPart.id, editWidth, editHeight);
+    if (editWidth > 0 && editHeight > 0) {
+      if (controlMode === 'individual') {
+        onUpdateDimensionsIndividual?.(placedPart.uniqueId, editWidth, editHeight);
+      } else if (originalPart) {
+        onUpdateDimensionsGroup(originalPart.id, editWidth, editHeight);
+      }
     }
   };
 
@@ -129,9 +137,9 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
         <div className="p-4 sm:p-5 space-y-4 overflow-y-auto">
           {/* 1. زر التبديل الرئيسي: تحكم فردي vs تحكم جماعي */}
           <div>
-            <label className="block text-[11px] font-bold text-slate-700 mb-1.5">
+            <span className="block text-[11px] font-bold text-slate-700 mb-1.5">
               {isAr ? 'وضع التحكم في التعديل:' : 'Control Scope:'}
-            </label>
+            </span>
             <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
               {/* زر تحكم فردي */}
               <button
@@ -201,6 +209,34 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
               <span>{isAr ? 'تدوير الآن' : 'Rotate Now'}</span>
             </button>
           </div>
+
+          {/* 2.5 تكرار النسخة المحددة فقط كقطعة مستقلة (يظهر في وضع التحكم الفردي) */}
+          {controlMode === 'individual' && (
+            <div className="p-3 bg-emerald-50/60 rounded-xl border border-emerald-200 flex items-center justify-between gap-2">
+              <div>
+                <span className="block text-xs font-bold text-emerald-950">
+                  {isAr ? 'تكرار هذه النسخة فقط' : 'Duplicate This Instance'}
+                </span>
+                <span className="text-[11px] text-emerald-800/80">
+                  {isAr
+                    ? 'تنشئ قطعة مستقلة جديدة (كمية 1) دون التأثير على الصنف الأصلي أو باقي النسخ.'
+                    : 'Creates a new independent piece (qty 1) without affecting the original group.'}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onDuplicateInstance?.(placedPart.uniqueId);
+                  onClose();
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-emerald-300 hover:border-emerald-600 hover:text-emerald-700 text-emerald-900 text-xs font-bold rounded-lg shadow-xs transition-colors cursor-pointer shrink-0"
+              >
+                <Copy className="w-3.5 h-3.5 text-emerald-600" />
+                <span>{isAr ? 'تكرار الآن' : 'Duplicate'}</span>
+              </button>
+            </div>
+          )}
 
           {/* 3. تعديل قفل العروق (أفقي=عرض \ رأسي=طول \ حر=تدوير حر حسب المساحة) */}
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
@@ -290,53 +326,71 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
             </div>
           </div>
 
-          {/* 4. تعديل الأبعاد (في الوضع الجماعي للصنف) أو الكمية */}
-          {controlMode === 'group' && originalPart && (
-            <div className="p-3 bg-purple-50/60 rounded-xl border border-purple-200 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-purple-950 flex items-center gap-1">
-                  <Maximize2 className="w-3.5 h-3.5 text-purple-700" />
-                  <span>{isAr ? 'تعديل أبعاد الصنف (بالمليمتر):' : 'Part Dimensions (mm):'}</span>
+          {/* 4. تعديل الأبعاد (فردي للنسخة الحالية، أو جماعي للصنف بالكامل) */}
+          <div className={`p-3 rounded-xl border space-y-3 ${
+            controlMode === 'individual'
+              ? 'bg-blue-50/60 border-blue-200'
+              : 'bg-purple-50/60 border-purple-200'
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className={`text-xs font-bold flex items-center gap-1 ${
+                controlMode === 'individual' ? 'text-blue-950' : 'text-purple-950'
+              }`}>
+                <Maximize2 className={`w-3.5 h-3.5 ${controlMode === 'individual' ? 'text-blue-700' : 'text-purple-700'}`} />
+                <span>
+                  {controlMode === 'individual'
+                    ? (isAr ? 'تعديل أبعاد هذه النسخة الفردية فقط (مم):' : 'Individual Instance Dimensions (mm):')
+                    : (isAr ? 'تعديل أبعاد كافة القطع المتكررة (مم):' : 'Batch Parts Dimensions (mm):')}
                 </span>
-                <button
-                  type="button"
-                  onClick={handleApplyDimensions}
-                  className="px-2.5 py-1 text-[11px] font-bold text-white bg-purple-700 hover:bg-purple-800 rounded-md transition-colors"
-                >
-                  {isAr ? 'حفظ الأبعاد' : 'Save'}
-                </button>
-              </div>
+              </span>
+              <button
+                type="button"
+                onClick={handleApplyDimensions}
+                className={`px-2.5 py-1 text-[11px] font-bold text-white rounded-md transition-colors cursor-pointer ${
+                  controlMode === 'individual'
+                    ? 'bg-blue-700 hover:bg-blue-800'
+                    : 'bg-purple-700 hover:bg-purple-800'
+                }`}
+              >
+                {isAr ? 'حفظ الأبعاد' : 'Save'}
+              </button>
+            </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[10px] text-purple-900 mb-0.5">
-                    {isAr ? 'العرض W' : 'Width'}
-                  </label>
-                  <input
-                    type="number"
-                    min="10"
-                    max="5000"
-                    value={editWidth}
-                    onChange={(e) => setEditWidth(Math.max(10, Number(e.target.value) || 0))}
-                    className="w-full px-2.5 py-1.5 bg-white border border-purple-200 rounded-lg text-xs font-mono-numbers font-bold text-slate-900 focus:outline-hidden focus:border-purple-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] text-purple-900 mb-0.5">
-                    {isAr ? 'الطول H' : 'Height'}
-                  </label>
-                  <input
-                    type="number"
-                    min="10"
-                    max="5000"
-                    value={editHeight}
-                    onChange={(e) => setEditHeight(Math.max(10, Number(e.target.value) || 0))}
-                    className="w-full px-2.5 py-1.5 bg-white border border-purple-200 rounded-lg text-xs font-mono-numbers font-bold text-slate-900 focus:outline-hidden focus:border-purple-600"
-                  />
-                </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className={`block text-[10px] mb-0.5 ${controlMode === 'individual' ? 'text-blue-900' : 'text-purple-900'}`}>
+                  {isAr ? 'العرض W' : 'Width'}
+                </label>
+                <input
+                  type="number"
+                  min="10"
+                  max="5000"
+                  value={editWidth}
+                  onChange={(e) => setEditWidth(Math.max(10, Number(e.target.value) || 0))}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono-numbers font-bold text-slate-900 focus:outline-hidden focus:border-blue-600"
+                  aria-label={isAr ? 'عرض القطعة بالمليمتر' : 'Piece width in mm'}
+                  name="pieceEditWidth"
+                />
               </div>
+              <div>
+                <label className={`block text-[10px] mb-0.5 ${controlMode === 'individual' ? 'text-blue-900' : 'text-purple-900'}`}>
+                  {isAr ? 'الطول H' : 'Height'}
+                </label>
+                <input
+                  type="number"
+                  min="10"
+                  max="5000"
+                  value={editHeight}
+                  onChange={(e) => setEditHeight(Math.max(10, Number(e.target.value) || 0))}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono-numbers font-bold text-slate-900 focus:outline-hidden focus:border-blue-600"
+                  aria-label={isAr ? 'طول القطعة بالمليمتر' : 'Piece height in mm'}
+                  name="pieceEditHeight"
+                />
+              </div>
+            </div>
 
-              {/* تعديل الكمية التكرارية */}
+            {/* تعديل الكمية التكرارية (يظهر فقط في التحكم الجماعي) */}
+            {controlMode === 'group' && originalPart && (
               <div className="pt-2 border-t border-purple-200/80 flex items-center justify-between">
                 <span className="text-xs font-bold text-purple-950 flex items-center gap-1">
                   <Copy className="w-3.5 h-3.5 text-purple-700" />
@@ -347,7 +401,7 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
                   <button
                     type="button"
                     onClick={() => onUpdateCountGroup(originalPart.id, Math.max(1, originalPart.count - 1))}
-                    className="px-2 py-1 text-xs text-purple-800 hover:bg-purple-100 font-bold"
+                    className="px-2 py-1 text-xs text-purple-800 hover:bg-purple-100 font-bold cursor-pointer"
                   >
                     -
                   </button>
@@ -357,14 +411,14 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
                   <button
                     type="button"
                     onClick={() => onUpdateCountGroup(originalPart.id, originalPart.count + 1)}
-                    className="px-2 py-1 text-xs text-purple-800 hover:bg-purple-100 font-bold"
+                    className="px-2 py-1 text-xs text-purple-800 hover:bg-purple-100 font-bold cursor-pointer"
                   >
                     +
                   </button>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* 5. زر الحذف */}
           <div className="pt-2 flex items-center justify-between border-t border-slate-200">

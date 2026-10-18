@@ -216,3 +216,73 @@ test('Sheet-First Maximal Packing: exhausts all spaces in Sheet 1 with smaller p
   assert.equal(sheet2.placedCount, 1);
   assert.equal(sheet2.placedParts[0].id, 'overflow_big');
 });
+
+test('Individual Part Override: single instance rotation and hide', () => {
+  const sheetConfig = {
+    sheetWidth: 1000,
+    sheetHeight: 1000,
+    sheetMargin: 0,
+    partGap: 0
+  };
+
+  const parts = [
+    { id: 'item', name: 'قطعة مكررة', width: 400, height: 200, count: 2, grain: GrainDirection.WIDTH }
+  ];
+
+  // item_1 keeps width=400, height=200, rotated=false
+  // item_2 gets override rotated=true
+  const overrides = {
+    'item_2': { rotated: true }
+  };
+
+  const res = nestSheets(parts, sheetConfig, 'optimal', 1, overrides);
+  assert.equal(res.sheets[0].placedParts.length, 2);
+
+  const p1 = res.sheets[0].placedParts.find(p => p.uniqueId === 'item_1')!;
+  const p2 = res.sheets[0].placedParts.find(p => p.uniqueId === 'item_2')!;
+  assert.equal(p1.rotated, false);
+  assert.equal(p2.rotated, true);
+
+  // Test individual deletion:
+  const overridesWithHidden = {
+    'item_2': { hidden: true }
+  };
+  const res2 = nestSheets(parts, sheetConfig, 'optimal', 1, overridesWithHidden);
+  assert.equal(res2.sheets[0].placedParts.length, 1);
+  assert.equal(res2.sheets[0].placedParts[0].uniqueId, 'item_1');
+});
+
+test('Group rotation via part-level overrideRotated: swaps placement orientation but preserves original dimensions', () => {
+  const sheetConfig = {
+    sheetWidth: 1000,
+    sheetHeight: 1000,
+    sheetMargin: 0,
+    partGap: 0
+  };
+
+  // قطعة غير مربعة 400×200 مع تدوير صنف مفروض overrideRotated: true
+  const parts = [
+    {
+      id: 'panel',
+      name: 'لوح',
+      width: 400,
+      height: 200,
+      count: 2,
+      grain: GrainDirection.WIDTH,
+      overrideRotated: true
+    }
+  ];
+
+  const res = nestSheets(parts, sheetConfig, 'optimal');
+  assert.equal(res.sheets[0].placedParts.length, 2);
+
+  for (const p of res.sheets[0].placedParts) {
+    assert.equal(p.rotated, true, 'Part must be placed rotated 90 degrees');
+    assert.equal(p.width, 200, 'Placed footprint width becomes original height');
+    assert.equal(p.height, 400, 'Placed footprint height becomes original width');
+    // الأبعاد الأصلية للقطعة يجب أن تبقى ثابتة (لا يتغير مقاس القطعة عند التدوير)
+    assert.equal(p.originalWidth, 400, 'originalWidth must stay unchanged after rotation');
+    assert.equal(p.originalHeight, 200, 'originalHeight must stay unchanged after rotation');
+  }
+});
+

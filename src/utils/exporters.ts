@@ -59,6 +59,42 @@ export function generateInkscapeSvg(sheet: SheetStats): string {
       ? `translate(${part.x + part.width}, ${part.y}) rotate(90)${scaleStr} translate(${-minX}, ${-minY})`
       : `translate(${part.x}, ${part.y})${scaleStr} translate(${-minX}, ${-minY})`;
 
+    // أجزاء NFP المستوردة: نستخدم المسارات الحقيقية (تشمل الثقوب/المسارات الداخلية)
+    // مع تحويل عام (إزاحة + تدوير بأي زاوية + مقياس) لإبقاء التصميم الأصلي كاملاً
+    if (
+      part.contour && part.contour.length >= 3 &&
+      part.svgSnippet &&
+      part.worldTx !== undefined && part.worldTy !== undefined
+    ) {
+      const rot = part.rotationDeg || 0;
+      const nfpTransform =
+        `translate(${part.worldTx.toFixed(3)}, ${part.worldTy.toFixed(3)})` +
+        ` rotate(${rot})${scaleStr} translate(${-minX}, ${-minY})`;
+      const innerContent = cleanSnippetForInkscape(part.svgSnippet);
+      return `    <!-- قطعة #${index + 1}: ${escapeXml(part.name)} -->
+    <g id="part_${escapeXml(part.id)}_${index + 1}" inkscape:label="${escapeXml(part.name)}" class="cnc-cut-part" transform="${nfpTransform}">
+      ${innerContent}
+    </g>`;
+    }
+
+    // أجزاء NFP: contour جاهز بإحداثيات اللوح (يشمل أي زاوية دوران)
+    if (part.contour && part.contour.length >= 3) {
+      const pts = part.contour
+        .map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`)
+        .join(' ');
+      return `    <!-- قطعة #${index + 1}: ${escapeXml(part.name)} -->
+    <g id="part_${escapeXml(part.id)}_${index + 1}" inkscape:label="${escapeXml(part.name)}" class="cnc-cut-part">
+      <polygon
+        points="${pts}"
+        fill="none"
+        stroke="#FF0000"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </g>`;
+    }
+
     if (part.svgSnippet) {
       const innerContent = cleanSnippetForInkscape(part.svgSnippet);
       return `    <!-- قطعة #${index + 1}: ${escapeXml(part.name)} -->
