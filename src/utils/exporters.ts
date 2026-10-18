@@ -49,8 +49,8 @@ export function generateInkscapeSvg(sheet: SheetStats): string {
     // حساب نسبة المقياس إن وجدت
     const scaleX = part.originalBBox?.width ? part.originalWidth / part.originalBBox.width : 1;
     const scaleY = part.originalBBox?.height ? part.originalHeight / part.originalBBox.height : 1;
-    const scaleStr = Math.abs(scaleX - 1) > 0.001 || Math.abs(scaleY - 1) > 0.001
-      ? ` scale(${scaleX.toFixed(4)}, ${scaleY.toFixed(4)})`
+    const scaleStr = scaleX !== 1 || scaleY !== 1
+      ? ` scale(${scaleX}, ${scaleY})`
       : '';
 
     // التحويل الهندسي المباشر (Group Transform) بدون وسوم svg متداخلة
@@ -68,7 +68,7 @@ export function generateInkscapeSvg(sheet: SheetStats): string {
     ) {
       const rot = part.rotationDeg || 0;
       const nfpTransform =
-        `translate(${part.worldTx.toFixed(3)}, ${part.worldTy.toFixed(3)})` +
+        `translate(${part.worldTx}, ${part.worldTy})` +
         ` rotate(${rot})${scaleStr} translate(${-minX}, ${-minY})`;
       const innerContent = cleanSnippetForInkscape(part.svgSnippet);
       return `    <!-- قطعة #${index + 1}: ${escapeXml(part.name)} -->

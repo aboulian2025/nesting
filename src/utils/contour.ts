@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file contour.ts
  * استخراج مضلعات Contour الحقيقية من قطع SVG لمحرك التسكين غير المنتظم (NFP)
  * يعتمد على تحليل نصي (DOM-free) كي يعمل في المتصفح وفي اختبارات Node معاً
@@ -614,6 +614,11 @@ export function svgElementToLoops(tag: string, attrs: Record<string, string>): C
       return [pointsAttrToLoop(attrs.points || '')].filter(l => l.length >= 3);
     case 'polyline':
       return [pointsAttrToLoop(attrs.points || '')].filter(l => l.length >= 2);
+    case 'line':
+      return [[
+        { x: parseFloat(attrs.x1 || '0'), y: parseFloat(attrs.y1 || '0') },
+        { x: parseFloat(attrs.x2 || '0'), y: parseFloat(attrs.y2 || '0') },
+      ]];
     default:
       return [];
   }
@@ -623,33 +628,72 @@ export function svgElementToLoops(tag: string, attrs: Record<string, string>): C
  * تحليل مقتطف SVG (markup ناتج من sanitizeSvgToRedOutline) إلى كل الحلقات
  * يعتمد على تحليل نصي بدل DOMParser كي يعمل في Node وفي Worker معاً
  */
+export type SvgMatrix = [number, number, number, number, number, number];
+const IDENTITY: SvgMatrix = [1, 0, 0, 1, 0, 0];
+
+export function multiplySvgMatrices(a: SvgMatrix, b: SvgMatrix): SvgMatrix {
+  return [
+    a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1],
+    a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3],
+    a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5],
+  ];
+}
+
+export function parseSvgTransform(value: string): SvgMatrix {
+  let matrix: SvgMatrix = [...IDENTITY];
+  for (const match of value.matchAll(/([a-z]+)\s*\(([^)]*)\)/gi)) {
+    const args = (match[2].match(/[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:e[-+]?\d+)?/gi) || []).map(Number);
+    let next: SvgMatrix = [...IDENTITY];
+    const angle = (args[0] || 0) * Math.PI / 180;
+    switch (match[1].toLowerCase()) {
+      case 'matrix': if (args.length === 6) next = args as SvgMatrix; break;
+      case 'translate': next[4] = args[0] || 0; next[5] = args[1] || 0; break;
+      case 'scale': next[0] = args[0] ?? 1; next[3] = args[1] ?? next[0]; break;
+      case 'rotate': {
+        next = [Math.cos(angle), Math.sin(angle), -Math.sin(angle), Math.cos(angle), 0, 0];
+        if (args.length >= 3) next = multiplySvgMatrices(
+          multiplySvgMatrices([1, 0, 0, 1, args[1], args[2]], next),
+          [1, 0, 0, 1, -args[1], -args[2]],
+        );
+        break;
+      }
+      case 'skewx': next[2] = Math.tan(angle); break;
+      case 'skewy': next[1] = Math.tan(angle); break;
+    }
+    matrix = multiplySvgMatrices(matrix, next);
+  }
+  return matrix;
+}
+
+export function transformSvgPoint(p: ContourPoint, m: SvgMatrix): ContourPoint {
+  return { x: m[0]*p.x+m[2]*p.y+m[4], y: m[1]*p.x+m[3]*p.y+m[5] };
+}
+
 export function snippetToLoops(snippet: string): ContourPoint[][] {
   if (!snippet || typeof snippet !== 'string') return [];
-
   const loops: ContourPoint[][] = [];
-  const tagRe = /<(path|rect|circle|ellipse|polygon|polyline|line)\b([^>]*)>/gi;
-  let m: RegExpExecArray | null;
-
-  while ((m = tagRe.exec(snippet)) !== null) {
-    const tag = m[1].toLowerCase();
-    const attrStr = m[2];
+  const stack: Array<{ tag: string; matrix: SvgMatrix }> = [{ tag: '', matrix: IDENTITY }];
+  // Keep group transforms instead of discarding them during contour extraction.
+  const tags = snippet.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<(\/?)([\w:.-]+)\b([^>]*?)(\/?)>/g);
+  for (const m of tags) {
+    const tag = m[2].toLowerCase();
+    if (m[1]) {
+      if (stack.length > 1 && stack[stack.length - 1].tag === tag) stack.pop();
+      continue;
+    }
     const attrs: Record<string, string> = {};
-    const attrRe = /([a-zA-Z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-    let am: RegExpExecArray | null;
-    while ((am = attrRe.exec(attrStr)) !== null) {
-      attrs[am[1].toLowerCase()] = am[2] !== undefined ? am[2] : am[3];
+    for (const attr of m[3].matchAll(/([a-zA-Z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      attrs[attr[1].toLowerCase()] = attr[2] ?? attr[3];
     }
-
-    if (tag === 'line') continue;
-
+    const matrix = multiplySvgMatrices(stack[stack.length - 1].matrix, parseSvgTransform(attrs.transform || ''));
     for (const loop of svgElementToLoops(tag, attrs)) {
-      const clean = dedupePoints(loop);
-      if (clean.length >= 3 && Math.abs(signedArea(clean)) > 1e-9) {
-        loops.push(clean);
-      }
+      const clean = dedupePoints(loop.map(p => transformSvgPoint(p, matrix)));
+      // Open strokes and self-intersections can have zero signed area. Keep
+      // their endpoints so the collision envelope contains all original art.
+      if (clean.length >= 2) loops.push(clean);
     }
+    if (!m[4]) stack.push({ tag, matrix });
   }
-
   return loops;
 }
 
@@ -677,7 +721,7 @@ export function chooseOuterContour(loops: ContourPoint[][]): ContourPoint[] {
   let allInside = true;
   for (let i = 0; i < loops.length; i++) {
     if (i === outerIdx) continue;
-    if (!pointInContour(loops[i][0], outer)) {
+    if (!loops[i].every(p => pointInContour(p, outer))) {
       allInside = false;
       break;
     }

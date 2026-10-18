@@ -18,6 +18,8 @@ import {
 import { NestingResult } from '../utils/nesting';
 
 interface HeaderProps {
+  engineLabel?: string;
+  exportDisabled?: boolean;
   result: NestingResult;
   onOpenSettings: () => void;
   onOpenSvgModal: () => void;
@@ -31,6 +33,8 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({
+  engineLabel = 'MaxRects BSSF',
+  exportDisabled = false,
   result,
   onOpenSettings,
   onOpenSvgModal,
@@ -64,7 +68,7 @@ export const Header: React.FC<HeaderProps> = ({
                   {isAr ? 'محرك توزيع الألواح وتوفير الخامة' : 'Sheet Nesting Engine'}
                 </h1>
                 <span className="text-xs px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 font-medium">
-                  MaxRects BSSF
+                  {engineLabel}
                 </span>
               </div>
               <p className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
@@ -128,6 +132,7 @@ export const Header: React.FC<HeaderProps> = ({
             {/* تصدير نسخة نظيفة Inkscape SVG */}
             <button
               onClick={onExportSvg}
+              disabled={exportDisabled}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition-colors cursor-pointer shadow-xs"
               title={
                 isAr
@@ -143,6 +148,7 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="inline-flex items-center rounded-lg shadow-xs">
               <button
                 onClick={onExportDxf}
+              disabled={exportDisabled}
                 className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold ${
                   result.sheets.length > 1 ? 'rounded-s-lg border-e-0' : 'rounded-lg'
                 } bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-300 transition-colors cursor-pointer`}
@@ -160,6 +166,7 @@ export const Header: React.FC<HeaderProps> = ({
               {result.sheets.length > 1 && onExportAllDxf && (
                 <button
                   onClick={onExportAllDxf}
+                  disabled={exportDisabled}
                   className="inline-flex items-center px-2 py-2 text-xs font-bold rounded-e-lg bg-sky-100 hover:bg-sky-200 text-sky-900 border border-sky-300 transition-colors cursor-pointer border-s border-s-sky-200"
                   title={
                     isAr
@@ -175,6 +182,7 @@ export const Header: React.FC<HeaderProps> = ({
             {/* تصدير CSV */}
             <button
               onClick={onExportCsv}
+              disabled={exportDisabled}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors cursor-pointer"
               title={isAr ? 'تنزيل قائمة القطع والمواضع كجدول إكسل' : 'Download cut list as CSV'}
             >

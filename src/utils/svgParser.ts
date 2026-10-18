@@ -7,6 +7,7 @@
 
 import { GrainDirection } from './nesting.ts';
 import type { GrainDirectionType, PartInput } from './nesting.ts';
+import { contourBounds, parseSvgTransform, snippetToLoops, transformSvgPoint } from './contour.ts';
 
 export interface ParsedSvgResult {
   parts: PartInput[];
@@ -16,6 +17,7 @@ export interface ParsedSvgResult {
 }
 
 export type SvgImportMode = 'single' | 'groups' | 'shapes';
+let importSequence = 0;
 
 /**
  * تحويل مختلف وحدات القياس إلى مليمتر (mm)
@@ -194,7 +196,34 @@ export function computePathBoundingBox(d: string): { x: number; y: number; width
 /**
  * حساب الصندوق المحيط لعنصر هندسي فردي
  */
+function cloneWithInheritedTransforms(el: Element): Element {
+  const clone = el.cloneNode(true) as Element;
+  const transforms: string[] = [];
+  let parent = el.parentElement;
+  while (parent) {
+    const transform = parent.getAttribute('transform');
+    if (transform) transforms.unshift(transform);
+    parent = parent.parentElement;
+  }
+  const ownTransform = el.getAttribute('transform');
+  if (ownTransform) transforms.push(ownTransform);
+  if (transforms.length) clone.setAttribute('transform', transforms.join(' '));
+  return clone;
+}
+
 export function getElementBoundingBox(el: Element): { x: number; y: number; width: number; height: number } {
+  const transformed = cloneWithInheritedTransforms(el);
+  const points = snippetToLoops(transformed.outerHTML).flat();
+  if (points.length >= 3) return contourBounds(points);
+  const bb = getLocalElementBoundingBox(el);
+  const matrix = parseSvgTransform(transformed.getAttribute('transform') || '');
+  return contourBounds([
+    { x: bb.x, y: bb.y }, { x: bb.x + bb.width, y: bb.y },
+    { x: bb.x + bb.width, y: bb.y + bb.height }, { x: bb.x, y: bb.y + bb.height },
+  ].map(p => transformSvgPoint(p, matrix)));
+}
+
+function getLocalElementBoundingBox(el: Element): { x: number; y: number; width: number; height: number } {
   const tag = el.tagName.toLowerCase();
 
   if (tag === 'rect') {
@@ -439,6 +468,7 @@ export function parseSvgString(
   mode: SvgImportMode = 'single'
 ): ParsedSvgResult {
   const parts: PartInput[] = [];
+  const importId = `SVG_${Date.now()}_${++importSequence}`;
 
   if (typeof window === 'undefined') {
     return { parts: [], rawSvg: svgString };
@@ -483,19 +513,19 @@ export function parseSvgString(
   // 1. الوضع الأول: استيراد التصميم بالكامل كقطعة واحدة متكاملة (موصى به للتصاميم المعقدة والمفرغة)
   if (mode === 'single' || allShapes.length === 1) {
     const bbox = getElementsCombinedBBox(allShapes);
-    const width = Math.max(10, Math.round(bbox.width * detectedScale));
-    const height = Math.max(10, Math.round(bbox.height * detectedScale));
+    const width = Math.max(0.001, bbox.width * detectedScale);
+    const height = Math.max(0.001, bbox.height * detectedScale);
 
     // إنشاء حاوية موحدة تحتوي على كافة مسارات التصميم الصالحة كـ Outline أحمر #FF0000
     const containerG = doc.createElementNS('http://www.w3.org/2000/svg', 'g');
     allShapes.forEach(shape => {
-      containerG.appendChild(shape.cloneNode(true));
+      containerG.appendChild(cloneWithInheritedTransforms(shape));
     });
 
     const snippet = sanitizeSvgToRedOutline(containerG, viewBoxDim);
 
     parts.push({
-      id: `Design_Single_${Date.now() % 10000}`,
+      id: `${importId}_Design`,
       name: 'تصميم متكامل (SVG Design)',
       width,
       height,
@@ -531,8 +561,8 @@ export function parseSvgString(
         processedElements.add(group);
         groupShapes.forEach(s => processedElements.add(s));
 
-        const width = Math.max(10, Math.round(bbox.width * detectedScale));
-        const height = Math.max(10, Math.round(bbox.height * detectedScale));
+        const width = Math.max(0.001, bbox.width * detectedScale);
+        const height = Math.max(0.001, bbox.height * detectedScale);
         const name = group.getAttribute('id') || `Part_Group_${partCounter}`;
 
         let grain = defaultGrain;
@@ -543,10 +573,10 @@ export function parseSvgString(
           grain = GrainDirection.HEIGHT;
         }
 
-        const snippet = sanitizeSvgToRedOutline(group);
+        const snippet = sanitizeSvgToRedOutline(cloneWithInheritedTransforms(group));
 
         parts.push({
-          id: `P_${partCounter++}`,
+          id: `${importId}_P_${partCounter++}`,
           name,
           width,
           height,
@@ -568,8 +598,8 @@ export function parseSvgString(
     const bbox = getElementBoundingBox(shape);
     if (bbox.width > 5 && bbox.height > 5) {
       processedElements.add(shape);
-      const width = Math.max(10, Math.round(bbox.width * detectedScale));
-      const height = Math.max(10, Math.round(bbox.height * detectedScale));
+      const width = Math.max(0.001, bbox.width * detectedScale);
+      const height = Math.max(0.001, bbox.height * detectedScale);
       const name = shape.getAttribute('id') || `Part_${partCounter}`;
 
       let grain = defaultGrain;
@@ -580,10 +610,10 @@ export function parseSvgString(
         grain = GrainDirection.HEIGHT;
       }
 
-      const snippet = sanitizeSvgToRedOutline(shape);
+      const snippet = sanitizeSvgToRedOutline(cloneWithInheritedTransforms(shape));
 
       parts.push({
-        id: `P_${partCounter++}`,
+        id: `${importId}_P_${partCounter++}`,
         name,
         width,
         height,

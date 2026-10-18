@@ -55,6 +55,11 @@ export interface NfpSheetOut {
 }
 
 export interface NfpCoreResult {
+  layoutMethod?: 'baseline' | 'compacted' | 'nfp';
+  optimizationTimedOut?: boolean;
+  baselineAreaMm2?: number;
+  occupiedAreaMm2?: number;
+  improvementPercent?: number;
   sheets: NfpSheetOut[];
   unplacedUniqueIds: string[];
   score: number;
@@ -74,5 +79,6 @@ export type NfpWorkerIn = { type: 'run'; request: NfpRunRequest };
 export type NfpWorkerOut =
   | { type: 'ready' }
   | { type: 'progress'; progress: NfpProgress }
+  | { type: 'checkpoint'; result: NfpCoreResult }
   | { type: 'done'; result: NfpCoreResult }
   | { type: 'error'; message: string };

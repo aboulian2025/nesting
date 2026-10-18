@@ -84,21 +84,13 @@ test('computeNfpRotations: FREE irregular gets fine angles', () => {
   assert.ok(Math.abs(coarse[1] - 60) < 1e-9);
 });
 
-test('computeNfpRotations: vertex cap for heavy contours', () => {
-  // >128 vertices → at most 4 angles
-  const heavy = computeNfpRotations({ width: 300, height: 400, grain: 'free' }, false, 32, 200);
-  assert.equal(heavy.length, 4);
-  assert.deepEqual(heavy, [0, 90, 180, 270]);
-  // >48 vertices → at most 8 angles
-  const medium = computeNfpRotations({ width: 300, height: 400, grain: 'free' }, false, 32, 60);
-  assert.equal(medium.length, 8);
-  assert.ok(Math.abs(medium[1] - 45) < 1e-9);
-  // small contours keep the requested fine count
-  const light = computeNfpRotations({ width: 300, height: 400, grain: 'free' }, false, 16, 8);
-  assert.equal(light.length, 16);
-  // no vertex info → unchanged behaviour
-  const plain = computeNfpRotations({ width: 300, height: 400, grain: 'free' }, false, 16);
-  assert.equal(plain.length, 16);
+test('computeNfpRotations: requested angles survive complex contours', () => {
+  for (const vertices of [8, 60, 200, 1000]) {
+    const rotations = computeNfpRotations({ width: 300, height: 400, grain: 'free' }, false, 32, vertices);
+    assert.equal(rotations.length, 32);
+    assert.equal(rotations[1], 11.25);
+    assert.ok(rotations.includes(90));
+  }
 });
 
 test('buildNfpRequest: rect part without snippet', () => {
@@ -285,4 +277,31 @@ test('rawResultToNestingResult: empty result → zero summary', () => {
   assert.equal(result.summary.unplacedCount, 1);
   assert.equal(result.summary.overallUtilizationPercent, 0);
   assert.equal(result.unplacedParts.length, 1);
+});
+
+test('irregular utilization uses the polygon area rather than its bounding box', () => {
+  const parts: PartInput[] = [{ id: 'triangle', name: 'Triangle', width: 100, height: 100, count: 1, grain: 'free' }];
+  const raw: NfpCoreResult = {
+    sheets: [{ placements: [{
+      uniqueId: 'triangle_1', sheetIndex: 0, x: 0, y: 0, width: 100, height: 100,
+      rotationDeg: 0, tx: 0, ty: 0,
+      contour: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 0, y: 100 }],
+      area: 5000, perimeter: 200 + Math.sqrt(20000),
+    }] }],
+    unplacedUniqueIds: [], score: 0, restartsRun: 1, elapsedMs: 0,
+  };
+  const result = rawResultToNestingResult(raw, parts, {
+    sheetWidth: 100, sheetHeight: 100, sheetMargin: 0, partGap: 0,
+  });
+  assert.equal(result.sheets[0].usedArea, 5000);
+  assert.equal(result.summary.overallUtilizationPercent, 50);
+});
+
+test('an omitted worker placement remains explicitly unplaced rather than counted as placed', () => {
+  const parts: PartInput[] = [{ id: 'missing', name: 'Missing', width: 20, height: 20, count: 2, grain: 'free' }];
+  const raw: NfpCoreResult = { sheets: [], unplacedUniqueIds: [], score: 0, restartsRun: 1, elapsedMs: 0 };
+  const result = rawResultToNestingResult(raw, parts, sheetCfg());
+  assert.equal(result.summary.totalPartsPlaced, 0);
+  assert.equal(result.summary.unplacedCount, 2);
+  assert.equal(result.unplacedParts.length, 2);
 });

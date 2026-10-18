@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { Pt } from './nfpTypes.ts';
-import { runGreedyNest, type NfpDeps } from './nfpCore.ts';
+import { collisionProxy, runGreedyNest, type NfpDeps } from './nfpCore.ts';
 import type { NfpPartRequest, NfpRunRequest, NfpSheetRequest } from './nfpTypes.ts';
 
 // Load SVGnest vendor scripts (classic-script globals) in the Node global scope,
@@ -188,8 +188,7 @@ test('L-shapes nest without overlap', () => {
   assertInBounds(contours, sh);
 });
 
-test('heavy-vertex contour (>16 pts) simplifies collision outline and nests', () => {
-  // 24-vertex jagged ring: exercises the gap>0 collision-outline CleanPolygon pass
+test('heavy-vertex contour preserves clearance and stays inside the sheet', () => {
   const heavy: Pt[] = [];
   for (let i = 0; i < 24; i++) {
     const ang = (i * 2 * Math.PI) / 24;
@@ -215,7 +214,7 @@ test('heavy-vertex contour (>16 pts) simplifies collision outline and nests', ()
   assertInBounds(contours, sh);
 });
 
-test('partGap respected between parts and from edges', () => {
+test('partGap is respected between parts without adding an edge margin', () => {
   const sh = sheet({ partGap: 5 });
   const res = run(
     [makeRectPart('a', 30, 20, [0]), makeRectPart('b', 30, 20, [0]), makeRectPart('c', 30, 20, [0])],
@@ -226,20 +225,15 @@ test('partGap respected between parts and from edges', () => {
   assertInBounds(contours, sh);
   for (let i = 0; i < contours.length; i++) {
     for (let j = i + 1; j < contours.length; j++) {
-      const grown = offsetPoly(contours[i], 5 / 2 - 0.01);
+      const grown = offsetPoly(contours[i], 5 - 0.01);
       assert.ok(
         intersectionArea(grown, contours[j]) < 1e-4,
         `gap<5 between ${i}/${j}`,
       );
     }
   }
-  // edge clearance ≥ gap/2 (bin contracted by gap/2)
-  for (const pts of contours) {
-    for (const p of pts) {
-      assert.ok(p.x >= 2.49, `x=${p.x} violates edge clearance 2.5`);
-      assert.ok(p.y >= 2.49, `y=${p.y} violates edge clearance 2.5`);
-    }
-  }
+  assert.ok(Math.abs(Math.min(...contours.flat().map(p => p.x))) < 0.01);
+  assert.ok(Math.abs(Math.min(...contours.flat().map(p => p.y))) < 0.01);
 });
 
 test('multi-sheet: 6 squares 12x12 on 30x30 bins → 2 sheets, all placed', () => {
@@ -357,4 +351,82 @@ test('dense mixed job: many parts place fast with no overlaps', () => {
     placedCount >= Math.floor(parts.length * 0.7),
     `only ${placedCount}/${parts.length} placed`,
   );
+});
+
+test('sheet margin remains exact with a nonzero part gap', () => {
+  const sh = sheet({ sheetWidth: 100, sheetHeight: 80, sheetMargin: 7, partGap: 6 });
+  const res = run([makeRectPart('edge', 30, 20, [0])], sh);
+  assert.equal(res.unplacedUniqueIds.length, 0);
+  const p = res.sheets[0].placements[0];
+  assert.ok(Math.abs(p.x - 7) < 0.01, `x=${p.x}`);
+  assert.ok(Math.abs(p.y - 7) < 0.01, `y=${p.y}`);
+  assertInBounds(allContours(res), sh);
+});
+
+test('exact-width parts share one sheet with the requested gap', () => {
+  const sh = sheet({ sheetWidth: 100, sheetHeight: 80, sheetMargin: 5, partGap: 4 });
+  const res = run([makeRectPart('a', 90, 30, [0]), makeRectPart('b', 90, 36, [0])], sh);
+  assert.equal(res.unplacedUniqueIds.length, 0);
+  assert.equal(res.sheets.length, 1);
+  assertInBounds(allContours(res), sh);
+  assertNoOverlap(allContours(res));
+  const ps = [...res.sheets[0].placements].sort((a, b) => a.y - b.y);
+  assert.ok(Math.abs(ps[1].y - ps[0].y - ps[0].height - 4) < 0.01);
+});
+
+test('exact-height parts share one sheet instead of losing a feasible line', () => {
+  const sh = sheet({ sheetWidth: 80, sheetHeight: 100, sheetMargin: 5, partGap: 4 });
+  const res = run([makeRectPart('a', 30, 90, [0]), makeRectPart('b', 36, 90, [0])], sh);
+  assert.equal(res.unplacedUniqueIds.length, 0);
+  assert.equal(res.sheets.length, 1);
+  assertInBounds(allContours(res), sh);
+  assertNoOverlap(allContours(res));
+});
+
+test('a part can fill the entire usable sheet despite a nonzero gap', () => {
+  const sh = sheet({ sheetMargin: 5, partGap: 4 });
+  const res = run([makeRectPart('full', 90, 90, [0])], sh);
+  assert.equal(res.unplacedUniqueIds.length, 0);
+  assert.equal(res.sheets.length, 1);
+  assertInBounds(allContours(res), sh);
+});
+
+test('one-sheet jobs keep searching for a compact offcut', () => {
+  const parts = [makeRectPart('a', 30, 20, [0, 90]), makeLPart('b', [0, 90, 180, 270])];
+  const first = run(parts, sheet(), { maxRestarts: 1 });
+  const improved = run(parts, sheet(), { maxRestarts: 4 });
+  assert.equal(improved.restartsRun, 4);
+  assert.equal(improved.sheets.length, 1);
+  assert.ok(improved.score <= first.score);
+  assertNoOverlap(allContours(improved));
+});
+
+test('self-intersecting imported paths keep every lobe inside the sheet', () => {
+  const contour = [{ x: 0, y: 0 }, { x: 40, y: 40 }, { x: 0, y: 40 }, { x: 40, y: 0 }];
+  const part = { ...makeRectPart('bowtie', 40, 40, [0]), contour };
+  const sh = sheet({ sheetWidth: 50, sheetHeight: 50, sheetMargin: 5, partGap: 2 });
+  const result = run([part], sh);
+  assert.equal(result.unplacedUniqueIds.length, 0);
+  const p = result.sheets[0].placements[0];
+  assert.equal(p.width, 40);
+  assert.equal(p.height, 40);
+  for (const point of contour) {
+    assert.ok(point.x + p.tx >= 4.99 && point.x + p.tx <= 45.01);
+    assert.ok(point.y + p.ty >= 4.99 && point.y + p.ty <= 45.01);
+  }
+});
+
+test('fast collision proxies contain the entire original curved outline', () => {
+  const original: Pt[] = Array.from({ length: 193 }, (_, i) => ({
+    x: 60+50*Math.cos(i*2*Math.PI/193), y: 60+40*Math.sin(i*2*Math.PI/193),
+  }));
+  const proxy = collisionProxy(C, original);
+  assert.ok(proxy.length < original.length, `proxy not reduced: ${proxy.length}`);
+  const source = toClipperPath(original), enclosing = toClipperPath(proxy);
+  C.JS.ScaleUpPath(source, 1000); C.JS.ScaleUpPath(enclosing, 1000);
+  const checker = new C.Clipper(), missing = new C.Paths();
+  checker.AddPath(source, C.PolyType.ptSubject, true);
+  checker.AddPath(enclosing, C.PolyType.ptClip, true);
+  checker.Execute(C.ClipType.ctDifference, missing, C.PolyFillType.pftNonZero, C.PolyFillType.pftNonZero);
+  assert.equal(missing.reduce((sum: number, path: any) => sum+Math.abs(C.Clipper.Area(path)), 0), 0);
 });
