@@ -12,7 +12,7 @@ import type {
   PartInput,
   SheetConfig,
 } from '../utils/nesting.ts';
-import type { NfpProgress, NfpWorkerIn, NfpWorkerOut } from '../utils/nfpTypes.ts';
+import type { NfpCoreResult, NfpProgress, NfpWorkerIn, NfpWorkerOut } from '../utils/nfpTypes.ts';
 
 export interface UseNfpNestingParams {
   enabled: boolean;
@@ -53,12 +53,15 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<NfpProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [settledKey, setSettledKey] = useState<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
 
   // String identities for effect deps (object deps change every render)
   const partsKey = JSON.stringify(parts);
   const overridesKey = JSON.stringify(partOverrides);
   const sheetKey = JSON.stringify(sheetConfig);
+  const requestKey = JSON.stringify([enabled, partsKey, overridesKey, sheetKey,
+    globalMultiplier, budgetMs, freeRotationCount, maxRestarts]);
 
   useEffect(() => {
     if (!enabled) {
@@ -73,6 +76,7 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
     });
 
     if (request.parts.length === 0) {
+      setSettledKey(requestKey);
       setResult(
         rawResultToNestingResult(
           { sheets: [], unplacedUniqueIds: [], score: 0, restartsRun: 0, elapsedMs: 0 },
@@ -89,6 +93,7 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
     }
 
     setRunning(true);
+    setResult(null);
     setError(null);
     setProgress(null);
 
@@ -96,24 +101,44 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
       type: 'module',
     });
     workerRef.current = worker;
+    let active = true;
+    let checkpoint: NfpCoreResult | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (raw: NfpCoreResult) => {
+      if (!active) return;
+      active = false;
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      setSettledKey(requestKey);
+      try {
+        setResult(rawResultToNestingResult(raw, parts, sheetConfig, globalMultiplier, partOverrides));
+        setError(null);
+      } catch (err) {
+        setResult(null);
+        setError(err instanceof Error ? err.message : String(err));
+      }
+      setProgress(null);
+      setRunning(false);
+      worker.terminate();
+    };
 
     worker.onmessage = (ev: MessageEvent<NfpWorkerOut>) => {
+      if (!active) return;
       const msg = ev.data;
       if (msg.type === 'progress') {
         setProgress(msg.progress);
+      } else if (msg.type === 'checkpoint') {
+        checkpoint = msg.result;
+        if (deadlineTimer === undefined) {
+          deadlineTimer = setTimeout(() => {
+            if (checkpoint) settle({ ...checkpoint, optimizationTimedOut: true,
+              elapsedMs: Math.max(checkpoint.elapsedMs, budgetMs) });
+          }, Math.max(0, budgetMs - checkpoint.elapsedMs));
+        }
       } else if (msg.type === 'done') {
-        setResult(
-          rawResultToNestingResult(
-            msg.result,
-            parts,
-            sheetConfig,
-            globalMultiplier,
-            partOverrides,
-          ),
-        );
-        setProgress(null);
-        setRunning(false);
+        settle(msg.result);
       } else if (msg.type === 'error') {
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+        setSettledKey(requestKey);
         setError(msg.message);
         setProgress(null);
         setRunning(false);
@@ -121,6 +146,9 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
     };
 
     worker.onerror = (ev: ErrorEvent) => {
+      if (!active) return;
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      setSettledKey(requestKey);
       setError(ev.message || 'NFP worker failed');
       setRunning(false);
     };
@@ -129,6 +157,8 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
     worker.postMessage(msg);
 
     return () => {
+      active = false;
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
       worker.terminate();
       if (workerRef.current === worker) workerRef.current = null;
     };
@@ -144,5 +174,11 @@ export function useNfpNesting(params: UseNfpNestingParams): UseNfpNestingState {
     maxRestarts,
   ]);
 
-  return { result, running, progress, error };
+  const isCurrent = settledKey === requestKey;
+  return {
+    result: enabled && isCurrent ? result : null,
+    running: enabled && (!isCurrent || running),
+    progress: enabled ? progress : null,
+    error: enabled && isCurrent ? error : null,
+  };
 }

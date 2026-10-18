@@ -111,6 +111,9 @@ export default function App() {
   // النتيجة المعروضة: NFP إن كان مفعلاً وانتهى، وإلا المستطيلات
   const nestingResult =
     engineMode === 'nfp' ? (nfpNesting.result ?? rectNestingResult) : rectNestingResult;
+  const canExport = engineMode !== 'nfp' ||
+    (!nfpNesting.running && !nfpNesting.error && nfpNesting.result !== null &&
+      nfpNesting.result.unplacedParts.length === 0);
 
   // 3. خط التراجع/الإعادة (Undo/Redo) يغطي: القطع، التخصيصات الفردية، إعدادات اللوح، الترتيب، والمكرر
   const docState = useMemo<DocState>(
@@ -493,6 +496,7 @@ export default function App() {
 
   // تصدير اللوح الحالي كنسخة Inkscape SVG نظيفة متوافقة تماماً مع ماكينات الـ CNC
   const handleExportSvg = () => {
+    if (!canExport) return;
     const currentSheet = nestingResult.sheets[activeSheetIndex] || nestingResult.sheets[0];
     if (!currentSheet) return;
     const svgContent = generateInkscapeSvg(currentSheet);
@@ -505,6 +509,7 @@ export default function App() {
 
   // تصدير اللوح الحالي بصيغة AutoCAD DXF (R12 / ASCII) لماكينات الـ CNC وبرامج CAM
   const handleExportDxf = () => {
+    if (!canExport) return;
     const currentSheet = nestingResult.sheets[activeSheetIndex] || nestingResult.sheets[0];
     if (!currentSheet) return;
     const dxfContent = generateSheetDxf(currentSheet);
@@ -517,6 +522,7 @@ export default function App() {
 
   // تصدير كافة الألواح الموزعة في ملف DXF واحد مرتبة جنبًا إلى جنب لماكينات الـ CNC
   const handleExportAllDxf = () => {
+    if (!canExport) return;
     if (!nestingResult.sheets.length) return;
     const dxfContent = generateAllSheetsDxf(nestingResult.sheets, 200);
     downloadFile(
@@ -528,6 +534,7 @@ export default function App() {
 
   // تصدير جدول التقطيع CSV
   const handleExportCsv = () => {
+    if (!canExport) return;
     const csvContent = generateCutListCsv(nestingResult);
     downloadFile(
       csvContent,
@@ -540,6 +547,8 @@ export default function App() {
     <div className={`min-h-screen bg-slate-100 flex flex-col font-sans ${isAr ? 'rtl' : 'ltr'}`}>
       {/* شريط العنوان العلوي والتحكم */}
       <Header
+        engineLabel={engineMode === 'nfp' ? 'NFP' : 'MaxRects BSSF'}
+        exportDisabled={!canExport}
         result={nestingResult}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenSvgModal={() => setIsSvgModalOpen(true)}
@@ -579,6 +588,38 @@ export default function App() {
         />
 
         {/* أزرار التبديل للشاشات الصغيرة (Mobile Tabs) */}
+        {engineMode === 'nfp' && (nfpNesting.result?.optimization?.improvementPercent ?? 0) > 0.1 && (
+          <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
+            {isAr ? 'تحسّن تجميع القطع بنسبة ' : 'Layout compaction improved by '}
+            <strong>{nfpNesting.result!.optimization!.improvementPercent!.toFixed(1)}%</strong>
+            {' — '}{isAr ? 'مساحة المستطيل المحيط بالقطع: من ' : 'Area enclosing the parts: from '}
+            {((nfpNesting.result!.optimization!.baselineAreaMm2 ?? 0)/1e6).toFixed(3)} {isAr ? 'م² إلى ' : 'm² to '}
+            {((nfpNesting.result!.optimization!.occupiedAreaMm2 ?? 0)/1e6).toFixed(3)} {isAr ? 'م²' : 'm²'}
+          </div>
+        )}
+        {engineMode === 'nfp' && nfpNesting.result?.optimization?.method === 'baseline' &&
+          nfpNesting.result.unplacedParts.length === 0 && (
+          <div role="status" className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
+            {isAr
+              ? (nfpNesting.result.optimization.timedOut
+                ? 'اكتمل توزيع جميع القطع. انتهى وقت تحسين الأشكال؛ احتُفظ بالتوزيع المكتمل. يمكنك زيادة مدة الحساب لتحسين التداخل.'
+                : 'اكتمل توزيع جميع القطع. احتُفظ بالخطة الأولية لأن محاولات تحسين الأشكال لم تعطِ توزيعًا أفضل.')
+              : (nfpNesting.result.optimization.timedOut
+                ? 'All parts are placed. Shape optimisation timed out; the complete layout was retained. Increase the time budget to improve interlocking.'
+                : 'All parts are placed. The initial layout was retained because shape optimisation did not improve it.')}
+          </div>
+        )}
+        {engineMode === 'nfp' && nfpNesting.result && nfpNesting.result.unplacedParts.length > 0 && (
+          <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+            <strong>{isAr
+              ? `${nfpNesting.result.unplacedParts.length} قطع غير موزعة — التصدير متوقف حتى اكتمال التوزيع.`
+              : `${nfpNesting.result.unplacedParts.length} unplaced parts — export requires a complete layout.`}</strong>
+            <p>{isAr
+              ? 'راجع مقاس اللوح واتجاه القطع ومدة الحساب. القطع المتبقية:'
+              : 'Check sheet size, allowed rotations and calculation time. Remaining parts:'}</p>
+            <p>{nfpNesting.result.unplacedParts.map(p => p.name || p.id).join('، ')}</p>
+          </div>
+        )}
         <div className="flex lg:hidden bg-white p-1 rounded-xl border border-slate-200 shadow-xs">
           <button
             onClick={() => setMobileTab('canvas')}

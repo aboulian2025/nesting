@@ -510,7 +510,7 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
                             transform={
                               `translate(${part.worldTx}, ${part.worldTy}) ` +
                               `rotate(${part.rotationDeg || 0}) ` +
-                              `scale(${(part.originalBBox?.width ? part.originalWidth / part.originalBBox.width : 1).toFixed(4)}, ${(part.originalBBox?.height ? part.originalHeight / part.originalBBox.height : 1).toFixed(4)}) ` +
+                              `scale(${part.originalBBox?.width ? part.originalWidth / part.originalBBox.width : 1}, ${part.originalBBox?.height ? part.originalHeight / part.originalBBox.height : 1}) ` +
                               `translate(${-(part.originalBBox?.x || 0)}, ${-(part.originalBBox?.y || 0)})`
                             }
                             pointerEvents="none"
@@ -574,8 +574,8 @@ export const SheetCanvas: React.FC<SheetCanvasProps> = ({
 
                   const scaleX = part.originalBBox?.width ? part.originalWidth / part.originalBBox.width : 1;
                   const scaleY = part.originalBBox?.height ? part.originalHeight / part.originalBBox.height : 1;
-                  const scaleStr = Math.abs(scaleX - 1) > 0.001 || Math.abs(scaleY - 1) > 0.001
-                    ? ` scale(${scaleX.toFixed(4)}, ${scaleY.toFixed(4)})`
+                  const scaleStr = scaleX !== 1 || scaleY !== 1
+                    ? ` scale(${scaleX}, ${scaleY})`
                     : '';
 
                   const partTransform = isRotated

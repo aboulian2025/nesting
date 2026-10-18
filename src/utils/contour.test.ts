@@ -201,3 +201,30 @@ test('snippetToLoops: مقتطف rect بزوايا دائرية rx/ry', () => {
   const b = contourBounds(loops[0]);
   assert.ok(Math.abs(b.width - 100) < 1 && Math.abs(b.height - 50) < 1);
 });
+
+test('snippetToLoops applies nested group and shape transforms in SVG order', () => {
+  const loops = snippetToLoops('<g transform="translate(10 20)"><g transform="scale(2 3)"><rect width="10" height="5" transform="translate(1 2)"/></g></g>');
+  assert.deepEqual(contourBounds(loops[0]), { x: 12, y: 26, width: 20, height: 15 });
+});
+
+test('snippetToLoops restores sibling transforms and handles rotate-about-center', () => {
+  const loops = snippetToLoops('<g transform="translate(10 0)"><rect width="10" height="5"/></g><rect width="10" height="5" transform="rotate(90 5 5)"/>');
+  assert.deepEqual(contourBounds(loops[0]), { x: 10, y: 0, width: 10, height: 5 });
+  const b = contourBounds(loops[1]);
+  assert.ok(Math.abs(b.x - 5) < 1e-8);
+  assert.ok(Math.abs(b.y) < 1e-8);
+  assert.ok(Math.abs(b.width - 5) < 1e-8);
+  assert.ok(Math.abs(b.height - 10) < 1e-8);
+});
+
+test('an open stroke protruding from a closed outline stays in the collision envelope', () => {
+  const snippet = '<rect width="20" height="20"/><path d="M10 10 L90 10"/><line x1="5" y1="5" x2="5" y2="80"/>';
+  const loops = snippetToLoops(snippet);
+  assert.equal(loops.length, 3);
+  assert.deepEqual(contourBounds(snippetToContour(snippet)), { x: 0, y: 0, width: 90, height: 80 });
+});
+
+test('a crossing secondary loop is not mistaken for an internal hole', () => {
+  const envelope = snippetToContour('<rect width="20" height="20"/><polygon points="10,10 50,10 50,30 10,30"/>');
+  assert.deepEqual(contourBounds(envelope), { x: 0, y: 0, width: 50, height: 30 });
+});

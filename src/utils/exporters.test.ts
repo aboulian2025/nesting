@@ -198,7 +198,7 @@ test('generateInkscapeSvg: imported NFP parts keep their real paths (holes inclu
   assert.ok(!svg.includes('<polygon'), 'imported NFP part must NOT collapse to a polygon');
   assert.ok(svg.includes('M 30 30'), 'inner hole subpath must be preserved');
   assert.ok(
-    svg.includes('translate(20.000, 20.000) rotate(30) translate(0, 0)'),
+    /translate\(20(?:\.0+)?, 20(?:\.0+)?\) rotate\(30\) translate\(0, 0\)/.test(svg),
     `general NFP transform missing, got: ${svg.match(/translate\([^"]*\)/)?.[0]}`,
   );
 });

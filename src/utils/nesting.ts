@@ -91,6 +91,10 @@ export interface SheetStats {
 }
 
 export interface NestingResult {
+  optimization?: {
+    method: 'baseline' | 'compacted' | 'nfp'; timedOut: boolean;
+    baselineAreaMm2?: number; occupiedAreaMm2?: number; improvementPercent?: number;
+  };
   summary: {
     sheetsUsed: number;
     totalPartsProvided: number;

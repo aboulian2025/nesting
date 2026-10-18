@@ -60,21 +60,21 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
   onDuplicateInstance,
   language
 }) => {
-  if (!isOpen || !placedPart) return null;
 
   const isAr = language === 'ar';
-  const partName = placedPart.name || (originalPart?.name ?? placedPart.id);
+  const partName = placedPart?.name || (originalPart?.name ?? placedPart?.id ?? '');
 
   // استخراج رقم النسخة إذا وُجد في الـ uniqueId مثل Door_1_2 -> رقم 2
-  const instanceMatch = placedPart.uniqueId.match(/_(\d+)$/);
+  const instanceMatch = placedPart?.uniqueId.match(/_(\d+)$/);
   const instanceNumber = instanceMatch ? instanceMatch[1] : '1';
   const totalCount = originalPart?.count || 1;
 
   // أبعاد التعديل المؤقتة
-  const [editWidth, setEditWidth] = useState(placedPart.originalWidth);
-  const [editHeight, setEditHeight] = useState(placedPart.originalHeight);
+  const [editWidth, setEditWidth] = useState(placedPart?.originalWidth ?? 0);
+  const [editHeight, setEditHeight] = useState(placedPart?.originalHeight ?? 0);
 
   useEffect(() => {
+    if (!placedPart) return;
     if (controlMode === 'group' && originalPart) {
       setEditWidth(originalPart.width);
       setEditHeight(originalPart.height);
@@ -85,6 +85,7 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
   }, [controlMode, originalPart, placedPart]);
 
   const handleApplyDimensions = () => {
+    if (!placedPart) return;
     if (editWidth > 0 && editHeight > 0) {
       if (controlMode === 'individual') {
         onUpdateDimensionsIndividual?.(placedPart.uniqueId, editWidth, editHeight);
@@ -94,6 +95,7 @@ export const PieceActionModal: React.FC<PieceActionModalProps> = ({
     }
   };
 
+  if (!isOpen || !placedPart) return null;
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
       <div

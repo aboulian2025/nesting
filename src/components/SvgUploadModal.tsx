@@ -34,7 +34,6 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
   onImportParts,
   language
 }) => {
-  if (!isOpen) return null;
   const isAr = language === 'ar';
 
   const [activeTab, setActiveTab] = useState<'upload' | 'samples' | 'paste'>('upload');
@@ -152,6 +151,7 @@ export const SvgUploadModal: React.FC<SvgUploadModalProps> = ({
     onClose();
   };
 
+  if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-3xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">

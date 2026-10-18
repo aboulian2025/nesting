@@ -18,7 +18,7 @@ import {
 
 export const DEFAULT_FREE_ROTATION_COUNT = 16;
 export const DEFAULT_NFP_BUDGET_MS = 5000;
-export const DEFAULT_NFP_RESTARTS = 4;
+export const DEFAULT_NFP_RESTARTS = 14;
 
 export interface NfpEngineOptions {
   freeRotationCount?: number;
@@ -57,7 +57,7 @@ export function computeNfpRotations(
   },
   isRect: boolean,
   freeRotationCount: number = DEFAULT_FREE_ROTATION_COUNT,
-  vertexCount?: number,
+  _vertexCount?: number,
 ): number[] {
   const w = part.width;
   const h = part.height;
@@ -81,13 +81,8 @@ export function computeNfpRotations(
     case GrainDirection.FREE:
     default: {
       if (isRect) return [0, 90];
-      let n = Math.max(4, Math.min(72, Math.floor(freeRotationCount) || DEFAULT_FREE_ROTATION_COUNT));
-      // Pair-NFP cost grows ~quadratically with vertex count; on heavy contours
-      // fewer fine angles leave more of the time budget for actual placement.
-      if (vertexCount !== undefined) {
-        if (vertexCount > 128) n = Math.min(n, 4);
-        else if (vertexCount > 48) n = Math.min(n, 8);
-      }
+      // The requested search space must not silently shrink with contour detail.
+      const n = Math.max(4, Math.min(72, Math.floor(freeRotationCount) || DEFAULT_FREE_ROTATION_COUNT));
       const step = 360 / n;
       return Array.from({ length: n }, (_, i) => Math.round(i * step * 100) / 100);
     }
@@ -161,6 +156,10 @@ export function rawResultToNestingResult(
 ): NestingResult {
   const expanded = expandParts(parts, globalMultiplier, partOverrides);
   const byUniqueId = new Map(expanded.map((p) => [p.uniqueId, p]));
+  if (byUniqueId.size !== expanded.length) {
+    throw new Error('Duplicate part IDs: re-import the designs to give each part a unique identity.');
+  }
+  const placedIds = new Set<string>();
 
   const W = sheetConfig.sheetWidth;
   const H = sheetConfig.sheetHeight;
@@ -176,7 +175,10 @@ export function rawResultToNestingResult(
 
     for (const pl of sheetOut.placements) {
       const src = byUniqueId.get(pl.uniqueId);
-      if (!src) continue;
+      if (!src || placedIds.has(pl.uniqueId)) {
+        throw new Error(`Invalid or repeated NFP placement: ${pl.uniqueId}`);
+      }
+      placedIds.add(pl.uniqueId);
       const quarterTurn = ((pl.rotationDeg % 180) + 180) % 180 === 90;
       placedParts.push({
         id: src.id,
@@ -202,7 +204,8 @@ export function rawResultToNestingResult(
       });
     }
 
-    const partsArea = placedParts.reduce((sum, p) => sum + p.width * p.height, 0);
+    // A rotated or concave part does not occupy its bounding-box area.
+    const partsArea = sheetOut.placements.reduce((sum, p) => sum + p.area, 0);
     const wasteArea = Math.max(0, totalArea - partsArea);
     const utilization = totalArea > 0 ? (partsArea / totalArea) * 100 : 0;
     const wastePercent = totalArea > 0 ? (wasteArea / totalArea) * 100 : 0;
@@ -231,8 +234,8 @@ export function rawResultToNestingResult(
     });
   }
 
-  const unplacedSet = new Set(raw.unplacedUniqueIds);
-  const unplacedParts = expanded.filter((p) => unplacedSet.has(p.uniqueId));
+  // Every input instance must be either placed or explicitly reported unplaced.
+  const unplacedParts = expanded.filter((p) => !placedIds.has(p.uniqueId));
 
   const totalSheetArea = sheetsStats.reduce((sum, s) => sum + s.totalArea, 0);
   const totalUsedArea = sheetsStats.reduce((sum, s) => sum + s.usedArea, 0);
@@ -244,6 +247,11 @@ export function rawResultToNestingResult(
   const totalMaterialCost = sheetsStats.length * price;
 
   return {
+    optimization: raw.layoutMethod ? {
+      method: raw.layoutMethod, timedOut: !!raw.optimizationTimedOut,
+      baselineAreaMm2: raw.baselineAreaMm2, occupiedAreaMm2: raw.occupiedAreaMm2,
+      improvementPercent: raw.improvementPercent,
+    } : undefined,
     summary: {
       sheetsUsed: sheetsStats.length,
       totalPartsProvided: expanded.length,
